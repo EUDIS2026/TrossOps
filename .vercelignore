@@ -1,0 +1,8 @@
+backend/data
+backend/.pytest_tmp
+backend/tests
+docs
+scripts
+_logs
+trossops.bundle
+frontend/node_modules

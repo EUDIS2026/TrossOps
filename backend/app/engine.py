@@ -47,6 +47,10 @@ class Engine:
             self.db.execute("CREATE TABLE IF NOT EXISTS mutations (revision INTEGER PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL, recorded_at TEXT NOT NULL, at_s REAL NOT NULL)")
             self.db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             row = self.db.execute("SELECT value FROM meta WHERE key='epoch'").fetchone()
+            if row and epoch is not None and datetime.fromisoformat(row[0]) != epoch:
+                # A pinned epoch wins over the store: mutations recorded against another epoch no longer apply.
+                self.db.execute("DELETE FROM mutations"); self.db.execute("DELETE FROM meta WHERE key='epoch'"); self.db.commit()
+                row = None
             if row:
                 self.epoch = datetime.fromisoformat(row[0])
             else:

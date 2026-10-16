@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd frontend && npm ci --no-audit --no-fund && npm run build",
+  "outputDirectory": "frontend/dist",
+  "framework": null,
+  "functions": { "api/index.py": { "maxDuration": 60 } },
+  "rewrites": [{ "source": "/api/(.*)", "destination": "/api/index" }],
+  "headers": [{ "source": "/api/stream", "headers": [{ "key": "Cache-Control", "value": "no-cache, no-transform" }] }],
+  "env": { "TROSSOPS_EPOCH": "hourly", "TROSSOPS_START_S": "600" }
+}

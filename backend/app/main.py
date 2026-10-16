@@ -18,8 +18,26 @@ from .weather import PUBLIC_POINTS, WeatherService
 
 API_VERSION = "1.0.0"
 default_db = Path(__file__).parents[1] / "data" / "trossops.sqlite"
-engine = Engine(Path(os.environ["TROSSOPS_DB_PATH"]) if os.environ.get("TROSSOPS_DB_PATH") else default_db,
-                speed=float(os.environ.get("TROSSOPS_CLOCK_SPEED", "1")), start_s=float(os.environ.get("TROSSOPS_START_S", "0")))
+
+
+def _epoch_from_env(speed: float, start_s: float):
+    """Serverless hosts (Vercel) start a fresh process per instance: with TROSSOPS_EPOCH=hourly every instance
+    derives the same scenario epoch from the wall clock, so the picture agrees across instances and restarts
+    hourly instead of running away. An ISO timestamp pins the epoch exactly; unset keeps the local behaviour."""
+    from datetime import datetime, timedelta, timezone
+    raw = os.environ.get("TROSSOPS_EPOCH")
+    if not raw:
+        return None
+    if raw == "hourly":
+        now = datetime.now(timezone.utc)
+        return now.replace(minute=0, second=0, microsecond=0) - timedelta(seconds=start_s / speed)
+    return datetime.fromisoformat(raw)
+
+
+_speed = float(os.environ.get("TROSSOPS_CLOCK_SPEED", "1"))
+_start_s = float(os.environ.get("TROSSOPS_START_S", "0"))
+_db = Path(os.environ["TROSSOPS_DB_PATH"]) if os.environ.get("TROSSOPS_DB_PATH") else (Path("/tmp/trossops.sqlite") if os.environ.get("VERCEL") else default_db)
+engine = Engine(_db, speed=_speed, start_s=_start_s, epoch=_epoch_from_env(_speed, _start_s))
 weather = WeatherService()
 
 app = FastAPI(title="TrossOps National Scene API", version=API_VERSION)
