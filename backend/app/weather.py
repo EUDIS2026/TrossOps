@@ -18,8 +18,26 @@ PUBLIC_POINTS: dict[str, dict] = {
     "ostersund": {"label": "Östersund", "point": [14.6357, 63.1792]},
     "kiruna": {"label": "Kiruna", "point": [20.2253, 67.8558]},
 }
-WANTED = {"air_temperature": "t", "wind_speed": "ws", "wind_from_direction": "wd", "wind_speed_of_gust": "gust", "cloud_area_fraction": "tcc_mean",
-          "probability_of_precipitation": "pcat", "visibility": "vis"}
+# SNOW1G point forecasts: each time-series entry is {"time": ISO, "data": {parameter: value}} (flat, no unit fields).
+WANTED = ("air_temperature", "wind_speed", "wind_from_direction", "wind_speed_of_gust", "cloud_area_fraction",
+          "probability_of_precipitation", "visibility_in_air", "precipitation_amount_mean", "symbol_code")
+UNITS = {"air_temperature": "°C", "wind_speed": "m/s", "wind_from_direction": "°", "wind_speed_of_gust": "m/s", "cloud_area_fraction": "%",
+         "probability_of_precipitation": "%", "visibility_in_air": "km", "precipitation_amount_mean": "mm", "symbol_code": ""}
+
+
+def _valid_time(entry: dict) -> str | None:
+    return entry.get("time") or entry.get("validTime")
+
+
+def _values(entry: dict) -> dict:
+    """Flat SNOW1G `data` object, or the older pmp3g `parameters` list, reduced to {name: value}."""
+    if isinstance(entry.get("data"), dict):
+        return entry["data"]
+    out: dict = {}
+    for param in entry.get("parameters", []) or []:
+        values = param.get("values") or [None]
+        out[param.get("name")] = values[0]
+    return out
 
 
 def parse_forecast(payload: dict, location: str) -> dict:
@@ -27,27 +45,24 @@ def parse_forecast(payload: dict, location: str) -> dict:
     now = datetime.now(timezone.utc)
     chosen = None
     for entry in series:
-        valid = datetime.fromisoformat(entry["validTime"].replace("Z", "+00:00"))
-        if valid >= now:
+        valid = _valid_time(entry)
+        if valid and datetime.fromisoformat(valid.replace("Z", "+00:00")) >= now:
             chosen = entry
             break
     chosen = chosen or (series[0] if series else None)
     if not chosen:
         raise ValueError("empty forecast")
-    data: dict[str, float | None] = {}
-    units: dict[str, str] = {}
-    for param in chosen.get("parameters", []):
-        name = param.get("name")
-        for key, legacy in WANTED.items():
-            if name in (key, legacy):
-                values = param.get("values") or [None]
-                data[key] = values[0]
-                units[key] = param.get("unit", "")
-    coords = (payload.get("geometry") or {}).get("coordinates") or [[None, None]]
+    values = _values(chosen)
+    data = {key: values[key] for key in WANTED if key in values}
+    units = {key: UNITS[key] for key in data}
+    coords = (payload.get("geometry") or {}).get("coordinates") or [None, None]
+    if coords and isinstance(coords[0], list):
+        coords = coords[0]
     meta = PUBLIC_POINTS[location]
     return {"status": "connected", "source": "SMHI SNOW1G point forecast (public)", "kind": "forecast", "location": location, "label": meta["label"],
-            "sourceUrl": SMHI_URL.format(lon=meta["point"][0], lat=meta["point"][1]), "requestedPoint": meta["point"], "gridPoint": coords[0],
-            "referenceTime": payload.get("referenceTime"), "approvedTime": payload.get("approvedTime"), "validTime": chosen.get("validTime"), "data": data, "units": units}
+            "sourceUrl": SMHI_URL.format(lon=meta["point"][0], lat=meta["point"][1]), "requestedPoint": meta["point"], "gridPoint": coords,
+            "referenceTime": payload.get("referenceTime"), "createdTime": payload.get("createdTime") or payload.get("approvedTime"),
+            "validTime": _valid_time(chosen), "data": data, "units": units}
 
 
 class WeatherService:
