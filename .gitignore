@@ -33,3 +33,6 @@ backend/data/*.db
 tmp/
 test-results/
 playwright-report/
+.pytest_tmp/
+_logs/
+trossops.bundle

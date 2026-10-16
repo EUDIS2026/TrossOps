@@ -29,6 +29,8 @@ if (-not (Test-Path "$root\.git")) {
   }
 }
 
+Step 'restore tracked files exactly as committed' { git checkout -- docs; git status --short | Select-Object -First 10 }
+
 Step 'backend dependencies' { python -m pip install -r backend\requirements.txt --disable-pip-version-check }
 Step 'backend tests' { Push-Location backend; python -m pytest -q; Pop-Location }
 Step 'frontend install' { Push-Location frontend; npm install --no-audit --no-fund; Pop-Location }
