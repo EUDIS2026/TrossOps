@@ -1,0 +1,134 @@
+{
+  "ui": "http://127.0.0.1:5173/",
+  "when": "2026-10-16T19:11:45.172Z",
+  "softwareGl": true,
+  "results": [
+    {
+      "id": "E2E-01",
+      "name": "Load useful scene",
+      "status": "pass",
+      "ms": 2376,
+      "detail": {
+        "kpis": 3,
+        "layers": 17,
+        "chip": "Live21:10rev 5",
+        "basemap": "Offline geography: SCB county boundaries (CC0). No basemap tiles.",
+        "units": 71
+      }
+    },
+    {
+      "id": "E2E-02",
+      "name": "Threat mode shows unknown tracks and predictions",
+      "status": "pass",
+      "ms": 5388,
+      "detail": {
+        "predictions": 14
+      }
+    },
+    {
+      "id": "E2E-03",
+      "name": "Select unknown track via search; inspector shows provenance",
+      "status": "pass",
+      "ms": 6715,
+      "detail": {
+        "title": "Unknown sea track S1",
+        "tags": [
+          "unknown",
+          "normal",
+          "observed"
+        ]
+      }
+    },
+    {
+      "id": "E2E-04",
+      "name": "LOD: regional sprites, exact picking at zoom 11",
+      "status": "pass",
+      "ms": 18086,
+      "detail": {
+        "title": "Tank platoon 01"
+      }
+    },
+    {
+      "id": "E2E-05",
+      "name": "3D: model layer active at close zoom, follow keeps unit centred",
+      "status": "pass",
+      "ms": 7423,
+      "detail": {
+        "models": 71,
+        "enabled": true,
+        "selected": "gv-01",
+        "pitch": 60
+      }
+    },
+    {
+      "id": "E2E-06",
+      "name": "Submit a field report; revision increments and feed shows it",
+      "status": "pass",
+      "ms": 9535,
+      "detail": {
+        "before": 5,
+        "rev": 6
+      }
+    },
+    {
+      "id": "E2E-07",
+      "name": "Decisions: optimise and commit an intervention; progress appears",
+      "status": "pass",
+      "ms": 10388,
+      "detail": {
+        "rows": 7,
+        "committed": 3,
+        "committedNow": true,
+        "canOptimise": true
+      }
+    },
+    {
+      "id": "E2E-08",
+      "name": "Replay: scrub back, picture is labelled replay, return to live",
+      "status": "pass",
+      "ms": 6327,
+      "detail": {
+        "chip": "Replay21:00rev 7",
+        "chip2": "Live21:11rev 7"
+      }
+    },
+    {
+      "id": "E2E-09",
+      "name": "Attention cell click explains itself",
+      "status": "pass",
+      "ms": 4244,
+      "detail": {
+        "head": "Attention",
+        "reasons": 1,
+        "sel": {
+          "kind": "cell",
+          "id": "39:132"
+        },
+        "under": [
+          "attention-heat",
+          "attention-fill",
+          "land"
+        ]
+      }
+    },
+    {
+      "id": "E2E-10",
+      "name": "Role scope: regional south sees fewer entities; civil mode changes layers",
+      "status": "pass",
+      "ms": 9550,
+      "detail": {
+        "nat": 114,
+        "south": 57
+      }
+    },
+    {
+      "id": "E2E-11",
+      "name": "No page errors during the run",
+      "status": "pass",
+      "ms": 204,
+      "detail": {
+        "errors": 0
+      }
+    }
+  ]
+}
