@@ -6,6 +6,15 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 New-Item -ItemType Directory -Force -Path "$root\_logs" | Out-Null
 
+# Bring the local history up to the delivered bundle (no-op when already current) and restore tracked files exactly.
+if (Test-Path "$root\trossops.bundle") {
+  git fetch "$root\trossops.bundle" main 2>&1 | Out-File "$root\_logs\git.txt"
+  git reset --mixed FETCH_HEAD 2>&1 | Out-File "$root\_logs\git.txt" -Append
+  git checkout -- docs 2>&1 | Out-File "$root\_logs\git.txt" -Append
+  git log --oneline -3 2>&1 | Out-File "$root\_logs\git.txt" -Append
+  git status --short 2>&1 | Out-File "$root\_logs\git.txt" -Append
+}
+
 Get-Process -Name python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.CommandLine -match 'uvicorn|vite') } | Stop-Process -Force -ErrorAction SilentlyContinue
 
 $env:TROSSOPS_START_S = "$StartS"
@@ -15,6 +24,8 @@ $ui = Start-Process -FilePath cmd.exe -ArgumentList '/c','npm run dev' -WorkingD
 Start-Sleep -Seconds 8
 try { (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/api/health).Content | Add-Content "$root\_logs\run.txt" } catch { "health failed: $_" | Add-Content "$root\_logs\run.txt" }
 try { (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/).StatusCode | Add-Content "$root\_logs\run.txt" } catch { "ui failed: $_" | Add-Content "$root\_logs\run.txt" }
+
+Push-Location backend; python -m pytest -q 2>&1 | Out-File "$root\_logs\pytest.txt"; Pop-Location
 
 if ($Verify) {
   Push-Location frontend
