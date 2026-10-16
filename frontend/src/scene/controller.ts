@@ -51,7 +51,7 @@ export class SceneController {
       minZoom: 2.2, maxZoom: 19, attributionControl: { compact: true, customAttribution: ATTRIBUTION[s.basemap] }, maxPitch: 75, cancelPendingTileRequestsWhileZooming: false,
     })
     this.map.setMissingStyleImageResolver(id => this.ensureImage(id))
-    ;(window as unknown as { __map?: MlMap; __scene?: SceneController }).__map = this.map; (window as unknown as { __scene?: SceneController }).__scene = this // debugging handles
+    Object.assign(window as unknown as Record<string, unknown>, { __map: this.map, __scene: this, __store: store }) // handles for browser verification scripts
     this.map.on('style.load', () => { this.styleReady = true; this.ensureLayers(); this.applyAll(); store.set({ basemapStatus: this.basemap === 'offline' ? 'offline' : 'online' }) })
     this.map.on('error', e => {
       const msg = String((e as unknown as { error?: Error }).error?.message ?? '')
@@ -412,13 +412,17 @@ export class SceneController {
   // ---- interaction ---------------------------------------------------------------------------------
   private pickable() { return ['unit-icons', 'unit-halo', 'clusters', 'incidents', 'attention-fill', 'attention-3d', 'areas-fill'].filter(id => this.map.getLayer(id)) }
 
-  private onClick(e: MapMouseEvent) {
+  private onClick(e: MapMouseEvent, retry = true) {
     if (this.map.getZoom() >= SPRITE_MIN_ZOOM) {
       const hit = this.hitTestUnit(e.point.x, e.point.y)
       if (hit) { actions.select('entity', hit); return }
     }
     const feats = this.map.queryRenderedFeatures(e.point, { layers: this.pickable() })
-    if (!feats.length) { actions.deselect(); return }
+    if (!feats.length) {
+      // The symbol source may be mid-reload (it is refreshed at 2 Hz); one short retry before treating it as empty map.
+      if (retry) { window.setTimeout(() => this.onClick(e, false), 160); return }
+      actions.deselect(); return
+    }
     const unit = feats.find(f => f.layer.id === 'unit-icons' || f.layer.id === 'unit-halo')
     if (unit) { actions.select('entity', String(unit.properties.id)); return }
     const cluster = feats.find(f => f.layer.id === 'clusters')
