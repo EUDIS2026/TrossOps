@@ -356,7 +356,9 @@ class SyntheticWorld:
                                  horizontalAccuracyM=None if e.affiliation != "unknown" else 1500.0)
         e.kinematics = Kinematics(headingDeg=round(heading, 1), speedMps=round(speed, 2))
         e.condition = ent.condition  # type: ignore[assignment]
-        e.readiness = ent.readiness
+        e.readiness = ent.readiness.model_copy(deep=True) if ent.readiness else None
+        if e.affiliation == "unknown":
+            e.track = None  # the simulator's route is not something an operator could know
         e.observedAt = observed_iso
         e.worldRevision = revision
         return e

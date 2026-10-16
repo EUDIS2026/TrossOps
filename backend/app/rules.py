@@ -392,8 +392,7 @@ def r12(ctx: Context, fx: Effects) -> None:
     for e in ctx.entities.values():
         if e.affiliation != "own" or e.kind in ("facility", "infrastructure"):
             continue
-        last = max((i.effectiveAt for i in ctx.inputs if e.id in i.entityRefs), default=None)
-        if last is None and ctx.t > 1500:  # units that never reported after 25 min of scenario time
+        if e.readiness and e.readiness.commsStatus == "lost":
             fx.stale_ids.add(e.id)
 
 

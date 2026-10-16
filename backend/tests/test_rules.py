@@ -45,3 +45,17 @@ def test_every_alert_is_traceable():
     ev = e.evaluate(900)
     for a in ev.fx.alerts:
         assert a.ruleId.startswith("R") and (a.inputIds or a.entityIds)
+
+
+def test_repeated_evaluation_does_not_drift_readiness(engine: Engine):
+    first = engine.evaluate(700).entities["airfield-syd"].readiness.score
+    for t in range(701, 720):
+        engine.evaluate(t)
+    again = engine.evaluate(720).entities["airfield-syd"].readiness.score
+    assert abs(first - again) < 1e-9
+    assert 0.3 < first < 1.0
+
+
+def test_unknown_tracks_do_not_expose_simulator_routes(engine: Engine):
+    e = engine.evaluate(100).entities["unk-air-01"]
+    assert e.track is None and e.sourceKind == "observed"
