@@ -11,6 +11,7 @@ export interface AppState {
   modeId: string
   layerOverrides: Record<string, boolean>
   threeD: boolean
+  weatherStatus: 'idle' | 'connected' | 'unavailable'
   terrain: boolean
   basemap: Basemap
   basemapStatus: 'loading' | 'online' | 'offline'
@@ -33,7 +34,7 @@ export interface AppState {
 }
 
 const initial: AppState = {
-  views: null, roleId: 'national_commander', modeId: 'readiness', layerOverrides: {}, threeD: false, terrain: false, basemap: 'operational', basemapStatus: 'loading',
+  views: null, roleId: 'national_commander', modeId: 'readiness', layerOverrides: {}, threeD: false, terrain: false, basemap: 'operational', basemapStatus: 'loading', weatherStatus: 'idle',
   snapshot: null, attention: null, attentionResolution: 'national', selected: null, hovered: null, follow: false, time: { mode: 'live', atS: 0 }, stream: 'connecting',
   panels: { layers: true, inspector: false, alerts: false, decisions: false, search: false, inputs: false, help: false },
   camera: { zoom: 4.4, pitch: 0, bearing: 0, lng: 17, lat: 62.3 }, detail: null, plan: null, error: null, busy: false, trailsForAll: false,

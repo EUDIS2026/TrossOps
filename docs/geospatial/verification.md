@@ -30,15 +30,24 @@ Setup (`scripts\setup-windows.cmd`): pip install ok; `npm install` 132 packages;
 
 Root cause: MapLibre 6 resolves its web worker relative to `import.meta.url`; under Vite that URL points into `.vite/deps`, where no worker file exists, so every GeoJSON and vector source failed to load. The error message also matched the basemap fallback regex, which switched the map to offline geography. The restricted-workspace bundle copied the worker next to the bundle by hand, which masked the defect. Fix: `setWorkerUrl` with the worker imported as a Vite asset (`?url`) in `scene/controller.ts`; fallback regex now ignores worker errors; HelpPanel rows keyed with `Fragment`.
 
-### B2 — after the fix
-
-Fill in from `_logs\verify.txt`, `_logs\pytest.txt`, `_logs\push.txt` after re-running `scripts\run-windows.cmd`:
+### B2 — after the worker fix (history up to `4943fd3`), 21:50 local
 
 | Check | Command | Result |
 |---|---|---|
-| Backend tests | `cd backend; python -m pytest -q` | not-run |
+| Backend tests | `cd backend; python -m pytest -q` | **pass** — 23 passed (pytest.ini basetemp fix confirmed) |
+| API and UI start | `scripts\run-windows.cmd` | **pass** — health working, 114 entities, UI 200 |
+| Browser acceptance online | `node scripts\verify-browser.mjs` | **pass** — 11/11; attribution shows `OpenFreeMap © OpenMapTiles`; 14 predictions; `errors: 0`. Screenshots in `_logs\verify\` on the machine. |
+| Push | `git push -u origin main` | **pass** — `main` on github.com/EUDIS2026/TrossOps at `4943fd3` |
+| Dark basemap, terrain, 3D buildings | manual, built-in browser at 127.0.0.1:5173 | **pass** — OpenFreeMap dark style, Mapterhorn terrain (`getTerrain()` set, hillshade visible), `buildings-3d` visible at zoom 15.5 / pitch 60 |
+| SMHI point forecast | `/api/environment/forecast/stockholm` | **fail → fixed** — live SNOW1G returned `unavailable: KeyError 'validTime'`: the real schema is `timeSeries[].time` + flat `data{}`; parser rewritten against the live payload (tests in `test_weather.py`), and the Weather layer now fetches and labels the seven reference cities. Re-check in B3. |
+
+### B3 — after the SMHI fix
+
+| Check | Command | Result |
+|---|---|---|
+| Backend tests | `python -m pytest -q` | not-run |
 | Browser acceptance online | `node scripts\verify-browser.mjs` | not-run |
-| Dark basemap, terrain, imagery, buildings render; SMHI `connected` | manual | not-run |
+| SMHI `connected`; Weather layer labels | manual | not-run |
 
 ## Known limits observed
 

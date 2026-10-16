@@ -40,6 +40,19 @@ cd frontend; npm run typecheck; npm test; npm run build; npm run verify
 
 `npm run verify` drives a real browser through eleven acceptance steps against the running API and UI and writes screenshots plus a results ledger to `frontend/test-results/`.
 
+## Deploy (Vercel)
+
+The repository is ready for Vercel as it stands: `vercel.json` builds `frontend/` as the static site and serves the FastAPI
+backend as one Python function (`api/index.py`, dependencies in the root `requirements.txt`).
+
+- Dashboard: **Add New → Project → Import `EUDIS2026/TrossOps`**, keep the detected settings, Deploy.
+- CLI, from the repository root: `npx vercel` (first run links the project), then `npx vercel --prod`.
+
+Serverless limits to know: each instance has its own SQLite store under `/tmp`, so committed interventions and field reports
+are per-instance and vanish on cold start; `TROSSOPS_EPOCH=hourly` makes every instance agree on scenario time and restarts
+the scenario each hour. The `/api/stream` SSE connection is capped at 60 s and reconnects. A single always-on process
+(`uvicorn`, as in **Run**) is the faithful deployment; Vercel is for sharing the demo.
+
 ## Layout
 
 ```

@@ -9,7 +9,7 @@ export const TERRAIN_TILEJSON = 'https://tiles.mapterhorn.com/tilejson.json'
 export const IMAGERY_TILES = 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{z}/{y}/{x}.jpg'
 
 export const ATTRIBUTION: Record<Basemap, string> = {
-  operational: 'MapLibre | OpenFreeMap © OpenMapTiles, data from OpenStreetMap contributors',
+  operational: 'MapLibre', // the OpenFreeMap style carries its own OpenMapTiles/OpenStreetMap attribution
   satellite: 'Sentinel-2 cloudless by EOX IT Services GmbH (CC BY-NC-SA 4.0), contains modified Copernicus Sentinel data',
   offline: 'Offline geography: SCB county boundaries (CC0). No basemap tiles.',
 }

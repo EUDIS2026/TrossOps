@@ -15,6 +15,8 @@ import { actions, currentMode, layerOn, store, type AppState, type Basemap } fro
 import { ATTRIBUTION, TERRAIN_TILEJSON, VECTOR_TILES_URL, styleFor } from './basemap'
 import { ModelLayer, type ModelInstance } from './models3d'
 import { SpriteLayer, type SpriteInstance } from './sprites'
+
+const fmt = (v: number | null | undefined, unit: string) => (v == null ? '—' : `${Math.round(v)}${unit}`)
 import { drawCount, drawIcon, drawIncident, drawLabel, iconId, modelKeyFor, palette, parseIconId, SIZE } from './semantics'
 
 type FC = FeatureCollection
@@ -94,6 +96,7 @@ export class SceneController {
     if (id.startsWith('ent:')) { const spec = parseIconId(id); if (spec) add(drawIcon(spec)); return }
     if (id.startsWith('lbl:')) { add(drawLabel(id.slice(4))); return }
     if (id.startsWith('lblu:')) { add(drawLabel(id.slice(5), { color: palette.unknown })); return }
+    if (id.startsWith('lblw:')) { add(drawLabel(id.slice(5), { color: '#9fd3ff', weight: 500 })); return }
     if (id.startsWith('count:')) { add(drawCount(Number(id.slice(6)))); return }
     if (id.startsWith('inc:')) { add(drawIncident(id.slice(4) as 'info')); return }
   }
@@ -204,6 +207,7 @@ export class SceneController {
     this.setVisible('plans-line', on('plans')); this.setVisible('trails-line', on('trails'))
     this.setVisible('interventions-line', on('interventions')); this.setVisible('incidents', on('incidents')); this.setVisible('incident-radius', on('incidents'))
     this.setVisible('counties-line', on('counties')); this.setVisible('weather-points', on('weather')); this.setVisible('weather-labels', on('weather'))
+    if (on('weather')) void this.refreshWeather()
     // Domain filters are applied to the unit features themselves (see buildUnitFeatures), so clusters count only visible domains.
     this.renderStatic()
   }
@@ -309,6 +313,33 @@ export class SceneController {
       const att = await api.attention(s.time.mode === 'replay' ? s.time.atS : null, res, s.roleId)
       if (this.attentionKey === key) store.set({ attention: att, attentionResolution: res })
     } catch { /* keep the previous surface; the status strip reports stream state */ }
+  }
+
+  private weatherAt = 0
+  /** SMHI point forecasts for the public reference cities, fetched through the API (10 min cache there, 5 min here).
+   * Forecasts are shown as labels only; they never become observations in the rule engine. */
+  async refreshWeather() {
+    if (Date.now() - this.weatherAt < 300_000) return
+    this.weatherAt = Date.now()
+    try {
+      const { points } = await api.points()
+      const ids = Object.keys(points)
+      const forecasts = await Promise.all(ids.map(id => api.forecast(id).catch(() => null)))
+      const features: Feature[] = []
+      let connected = 0
+      ids.forEach((id, i) => {
+        const f = forecasts[i], p = points[id]
+        if (!f) return
+        const d = f.data ?? {}
+        const text = f.status === 'connected'
+          ? `${p.label}  ${fmt(d.air_temperature, '°')}  ${fmt(d.wind_speed, ' m/s')}${d.wind_speed_of_gust != null ? ` (${Math.round(d.wind_speed_of_gust)})` : ''}  ${fmt(d.visibility_in_air, ' km vis')}`
+          : `${p.label}  forecast unavailable`
+        if (f.status === 'connected') connected++
+        features.push({ type: 'Feature', properties: { id, kind: 'forecast', label: p.label, status: f.status, labelIcon: `lblw:${text}`, validTime: f.validTime ?? '', source: f.source }, geometry: { type: 'Point', coordinates: p.point } })
+      })
+      ;(this.map.getSource('weather') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features })
+      store.set({ weatherStatus: connected ? 'connected' : 'unavailable' })
+    } catch { store.set({ weatherStatus: 'unavailable' }) }
   }
 
   async refreshTrails() {

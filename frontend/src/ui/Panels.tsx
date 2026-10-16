@@ -127,6 +127,7 @@ export function ErrorToast() {
 export function DataNotice() {
   const notice = useApp(s => s.snapshot?.dataNotice)
   const basemap = useApp(s => s.basemapStatus)
+  const weather = useApp(s => s.weatherStatus)
   if (!notice) return null
-  return <div className="notice">{notice}{basemap === 'offline' ? ' Basemap: offline geography.' : ''}</div>
+  return <div className="notice">{notice}{basemap === 'offline' ? ' Basemap: offline geography.' : ''}{weather === 'connected' ? ' SMHI forecasts: connected.' : weather === 'unavailable' ? ' SMHI forecasts: unavailable.' : ''}</div>
 }
