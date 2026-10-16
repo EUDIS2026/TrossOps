@@ -20,7 +20,7 @@ Acceptance steps: load useful scene with KPIs, layers and moving units · Threat
 
 Setup (`scripts\setup-windows.cmd`): pip install ok; `npm install` 132 packages; `tsc` clean; vitest 4 passed; `vite build` ok (1.33 MB JS); Playwright Chromium installed.
 
-### B1 — first run (commit `9a7f…`, before the worker fix)
+### B1 — first run (history up to `e51b48d`, before the worker fix)
 
 | Check | Command | Result |
 |---|---|---|
