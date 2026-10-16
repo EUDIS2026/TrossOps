@@ -16,16 +16,28 @@ Network: no npm, PyPI or tile access. Frontend bundled with esbuild from the sam
 
 Acceptance steps: load useful scene with KPIs, layers and moving units · Threat mode shows predictions · select an unknown track by search with `observed` provenance · regional LOD and exact picking at zoom 11 · 3D model layer and follow at zoom 16 · submit a field report, revision increments, feed shows it · optimise and commit an intervention, progress shown · replay and return to live · attention cell explains itself · regional role scopes entities, civil mode changes layers · no page errors.
 
-## Run B — owner's Windows machine (Edge / Chromium, real GPU, online)
+## Run B — owner's Windows machine (Playwright Chromium, hardware GPU, online), 16 October 2026
 
-Fill in after running the same commands there:
+Setup (`scripts\setup-windows.cmd`): pip install ok; `npm install` 132 packages; `tsc` clean; vitest 4 passed; `vite build` ok (1.33 MB JS); Playwright Chromium installed.
+
+### B1 — first run (commit `9a7f…`, before the worker fix)
+
+| Check | Command | Result |
+|---|---|---|
+| Backend tests | `cd backend; python -m pytest -q` | **fail** — 13 passed, 10 errors: `PermissionError` creating `%TEMP%\pytest-of-<user>`; fixed by `backend/pytest.ini` (`--basetemp=.pytest_tmp`), re-run pending |
+| API and UI start | `scripts\run-windows.cmd` | **pass** — `/api/health` working, 114 entities, UI 200 |
+| Browser acceptance | `node scripts\verify-browser.mjs` | **fail** — 8/11. E2E-02 (no prediction geometry), E2E-09 (no attention cell), E2E-11 (console: `Worker failed to load`, HelpPanel key warning). Screenshots show an empty map. |
+
+Root cause: MapLibre 6 resolves its web worker relative to `import.meta.url`; under Vite that URL points into `.vite/deps`, where no worker file exists, so every GeoJSON and vector source failed to load. The error message also matched the basemap fallback regex, which switched the map to offline geography. The restricted-workspace bundle copied the worker next to the bundle by hand, which masked the defect. Fix: `setWorkerUrl` with the worker imported as a Vite asset (`?url`) in `scene/controller.ts`; fallback regex now ignores worker errors; HelpPanel rows keyed with `Fragment`.
+
+### B2 — after the fix
+
+Fill in from `_logs\verify.txt`, `_logs\pytest.txt`, `_logs\push.txt` after re-running `scripts\run-windows.cmd`:
 
 | Check | Command | Result |
 |---|---|---|
 | Backend tests | `cd backend; python -m pytest -q` | not-run |
-| Install, type check, build | `cd frontend; npm install; npm run typecheck; npm run build` | not-run |
-| Frontend unit tests | `npm test` | not-run |
-| Browser acceptance online | `npm run verify` | not-run |
+| Browser acceptance online | `node scripts\verify-browser.mjs` | not-run |
 | Dark basemap, terrain, imagery, buildings render; SMHI `connected` | manual | not-run |
 
 ## Known limits observed

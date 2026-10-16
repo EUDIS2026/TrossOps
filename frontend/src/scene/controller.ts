@@ -1,7 +1,12 @@
 /** SceneController owns the MapLibre map, every scene source/layer, the render loop and camera intents.
  * React never re-renders per frame: the controller reads the store and the entity buffer directly. */
-import { Map as MlMap, LngLatBounds, NavigationControl, ScaleControl, type GeoJSONSource, type LayerSpecification, type LngLatLike, type MapMouseEvent } from 'maplibre-gl'
+import { Map as MlMap, LngLatBounds, NavigationControl, ScaleControl, setWorkerUrl, type GeoJSONSource, type LayerSpecification, type LngLatLike, type MapMouseEvent } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
+// MapLibre 6 locates its worker relative to import.meta.url. Under Vite (dev and build) that URL points at the
+// pre-bundled dependency, where no worker file exists, so every GeoJSON/vector source silently fails to load.
+// Resolving the worker as an asset makes it correct in dev, in the production build and in the offline bundle.
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
+setWorkerUrl(maplibreWorkerUrl)
 import type { Feature, FeatureCollection, Point } from 'geojson'
 import type { AttentionResponse, Condition, SceneEntity, Snapshot } from '../contracts/types'
 import { api } from '../core/api'
@@ -55,7 +60,8 @@ export class SceneController {
     this.map.on('style.load', () => { this.styleReady = true; this.ensureLayers(); this.applyAll(); store.set({ basemapStatus: this.basemap === 'offline' ? 'offline' : 'online' }) })
     this.map.on('error', e => {
       const msg = String((e as unknown as { error?: Error }).error?.message ?? '')
-      if (this.basemap !== 'offline' && /style|Failed to fetch|NetworkError|load/i.test(msg) && !this.styleReady) {
+      // Only a failure to fetch the style itself falls back to offline geography; a worker or tile error must not.
+      if (this.basemap !== 'offline' && !this.styleReady && !/worker/i.test(msg) && /style|Failed to fetch|NetworkError|load/i.test(msg)) {
         actions.setBasemap('offline')
       }
     })

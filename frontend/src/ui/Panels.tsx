@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { actions, EMPTY, useApp } from '../core/store'
 import { channelLabel, fmtClock, fmtDuration, kindLabel, useRuntime } from './context'
 import { Icon } from './icons'
@@ -112,7 +112,7 @@ export function HelpPanel() {
   const rows: [string, string][] = [['/', 'Search'], ['L', 'Layers'], ['A', 'Alerts and input feed'], ['D', 'Decisions'], ['R', 'Submit a report'], ['3', 'Toggle 3D'], ['F', 'Follow the selected unit'], ['Esc', 'Deselect / close'], ['Home', 'Reset the view for this mode'], ['?', 'This list']]
   return <aside className={`panel floating ${open ? '' : 'hidden'}`} aria-label="Shortcuts" aria-hidden={!open}>
     <div className="panel-head"><h2>Shortcuts</h2><button className="icon-button" title="Close" onClick={() => actions.setPanel('help', false)}><Icon.close /></button></div>
-    <div className="panel-body"><div className="help">{rows.map(([k, v]) => <><kbd key={k}>{k}</kbd><span key={k + v}>{v}</span></>)}</div>
+    <div className="panel-body"><div className="help">{rows.map(([k, v]) => <Fragment key={k}><kbd>{k}</kbd><span>{v}</span></Fragment>)}</div>
       <div className="note">Click a cluster to open it, a unit to inspect it, an attention cell to see which rules raised it, and an area to see its blockers. Drag the time slider to replay; return to live at any point.</div>
     </div>
   </aside>
