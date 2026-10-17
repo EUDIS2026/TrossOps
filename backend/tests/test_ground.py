@@ -42,9 +42,11 @@ def test_land_mask_knows_lakes_and_towns(land):
 
 def test_sites_stand_on_dry_ground_clear_of_roads(world, land, roads):
     for sid, lay in world.layouts.items():
-        dry, wet, sea = placement_samples(lay)
+        dry, wet, sea, core = placement_samples(lay)
         assert not [q for q in dry if land.is_water(q)], f"{sid} footprint on water"
-        assert not [q for q in dry if land.cell(q) in roads], f"{sid} built over a road"
+        assert not [q for q in dry if land.cell(q) in roads], f"{sid} fenced over a national road"
+        bad = [q for q in core if land.on_any_road(q) or land.cell(q) in roads]
+        assert len(bad) <= 0.01 * len(core), f"{sid}: {len(bad)} of {len(core)} built-surface samples on a road"
         assert all(land.is_water(q) for q in wet), f"{sid} berths or pads not in the water"
         assert all(land.sea.is_water(q) for q in sea), f"{sid} channel not in navigable sea"
 

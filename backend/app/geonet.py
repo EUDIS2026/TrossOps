@@ -168,7 +168,7 @@ class RoadNet:
                 adj[b].append((a, ~i))  # reverse traversal encoded as ~i
         self.adj = adj
         self._grid: dict[tuple[int, int], list[int]] | None = None
-        self._vgrid: dict[tuple[int, int], list[tuple[float, float, int]]] | None = None
+        self._long_edges: list[int] | None = None  # edges longer than _SHORT_EDGE_M (nodes_within)
         self._lock = threading.Lock()
 
     # -- geometry helpers ------------------------------------------------------------
@@ -241,17 +241,12 @@ class RoadNet:
 
     def nodes_within(self, center: LngLat, radius_m: float, classes: set[str] | None = None) -> list[LngLat]:
         """Road vertices (junctions and shape points) within radius_m of center, nearest first.
-        `classes` restricts to vertices on edges of those road classes. Deterministic order."""
-        if self._vgrid is None:
-            with self._lock:
-                if self._vgrid is None:
-                    vg: dict[tuple[int, int], list[tuple[float, float, int]]] = {}
-                    c = self._CELL
-                    for i in range(len(self.ea)):
-                        cls = self.ecls[i]
-                        for x, y in self.edge_coords(i):
-                            vg.setdefault((int(x // (2 * c)), int(y // c)), []).append((x, y, cls))
-                    self._vgrid = vg
+        `classes` restricts to vertices on edges of those road classes. Deterministic order.
+
+        Only edges that can reach the disc are decoded: every vertex of edge i lies within its polyline length
+        `elen[i]` of either end node, so an edge is a candidate iff an end node is within radius + elen (+ margin)
+        of `center`. Short edges are found through the node grid, long ones from a precomputed list. (Decoding
+        the whole national graph up front cost ~1-2 s of every cold start.)"""
         want = None if classes is None else {i for i, c in enumerate(self.classes) if c in classes}
         c = self._CELL
         px, py = float(center[0]), float(center[1])
@@ -259,16 +254,54 @@ class RoadNet:
         kx = max(0.05, math.cos(math.radians(min(89.0, abs(py) + 1.0))))
         dx = int(radius_m / (2 * c * M_PER_DEG * kx)) + 1
         cx, cy = int(px // (2 * c)), int(py // c)
+        x_lo, x_hi, y_lo, y_hi = cx - dx, cx + dx, cy - dy, cy + dy
         found: dict[LngLat, float] = {}
-        for ix in range(cx - dx, cx + dx + 1):
-            for iy in range(cy - dy, cy + dy + 1):
-                for x, y, cls in self._vgrid.get((ix, iy), ()):
-                    if want is not None and cls not in want:
-                        continue
-                    d = haversine_m((px, py), (x, y))
-                    if d <= radius_m:
-                        found[(x, y)] = d
+        for i in self._edges_near(px, py, radius_m):
+            cls = self.ecls[i]
+            if want is not None and cls not in want:
+                continue
+            for x, y in self.edge_coords(i):
+                if not (x_lo <= int(x // (2 * c)) <= x_hi and y_lo <= int(y // c) <= y_hi):
+                    continue
+                d = haversine_m((px, py), (x, y))
+                if d <= radius_m:
+                    found[(x, y)] = d
         return [p for p, _d in sorted(found.items(), key=lambda kv: (kv[1], kv[0]))]
+
+    _SHORT_EDGE_M = 2_000.0
+
+    def _edges_near(self, px: float, py: float, radius_m: float) -> list[int]:
+        """Indices of edges that may have a vertex within radius_m of (px, py) (conservative superset, sorted)."""
+        if self._long_edges is None:
+            with self._lock:
+                if self._long_edges is None:
+                    self._long_edges = [i for i, ln in enumerate(self.elen) if ln > self._SHORT_EDGE_M]
+        long_edges = self._long_edges
+        x, y, ea, eb, elen = self.x, self.y, self.ea, self.eb, self.elen
+
+        def near(n: int, slack: float) -> bool:
+            return _fast_m(px, py, x[n], y[n]) * 0.99 - 100.0 <= radius_m + slack
+
+        out: set[int] = set()
+        for i in long_edges:
+            if near(ea[i], elen[i] * 1.01) or near(eb[i], elen[i] * 1.01):
+                out.add(i)
+        g = self._index()
+        c = self._CELL
+        reach = radius_m + self._SHORT_EDGE_M * 1.01 + 200.0
+        ry = int(reach / (c * M_PER_DEG)) + 1
+        kx = max(0.05, math.cos(math.radians(min(89.0, abs(py) + 1.0 + reach / M_PER_DEG))))
+        rx = int(reach / (2 * c * M_PER_DEG * kx)) + 1
+        cx, cy = int(px // (2 * c)), int(py // c)
+        adj = self.adj
+        for ix in range(cx - rx, cx + rx + 1):
+            for iy in range(cy - ry, cy + ry + 1):
+                for n in g.get((ix, iy), ()):
+                    for _v, e in adj[n]:
+                        i = e if e >= 0 else ~e
+                        if i not in out and elen[i] <= self._SHORT_EDGE_M and near(n, elen[i] * 1.01):
+                            out.add(i)
+        return sorted(out)
 
     # -- routing ----------------------------------------------------------------------
     def _astar(self, s: int, t: int, inv_speed: list[float], vmax: float, avoid: _Avoid | None):
@@ -786,7 +819,7 @@ class LandMask:
     falling back to the sea mask outside the covered tiles. Placement of anything that stands or drives on the
     ground goes through `is_dry` / `nearest_dry` / `fits`."""
 
-    def __init__(self, path: Path, sea: "SeaNet | None" = None):
+    def __init__(self, path: Path, sea: "SeaNet | None" = None, roads_path: Path | None = None):
         raw = path.read_bytes()
         if raw[:8] != b"TROSLND1":
             raise ValueError(f"{path} is not a TrossOps land mask")
@@ -802,6 +835,23 @@ class LandMask:
         self.w, self.h, self.dlng, self.dlat = hdr["w"], hdr["h"], hdr["dlng"], hdr["dlat"]
         self.sea = sea
         self._roads: dict[str, set[int]] = {}
+        # every road class incl. minor roads (z12) around placements, same grid (optional, see build step `roads`)
+        self.road_bits: bytes | None = None
+        if roads_path is not None and roads_path.exists():
+            rr = roads_path.read_bytes()
+            if rr[:8] == b"TROSRDS1":
+                (rl,) = struct.unpack("<I", rr[8:12])
+                rh = json.loads(rr[12:12 + rl].decode("utf-8"))
+                if (rh["w"], rh["h"], rh["dlng"], rh["dlat"]) == (self.w, self.h, self.dlng, self.dlat):
+                    ro = 12 + rl
+                    self.road_bits = zlib.decompress(rr[ro:ro + rh["roads"]["zlen"]])
+
+    def on_any_road(self, q: LngLat) -> bool:
+        """A road of any class (incl. minor roads) crosses q's cell (only where roads.bin has coverage)."""
+        if self.road_bits is None:
+            return False
+        c = self.cell(q)
+        return c >= 0 and bool((self.road_bits[c >> 3] >> (c & 7)) & 1)
 
     def cell(self, p: LngLat) -> int:
         """Grid cell id of p (-1 outside the grid)."""
@@ -851,7 +901,7 @@ class LandMask:
         None if nothing within max_m."""
         # judged on the coordinate as stored (6 decimals): a point on a cell edge must not flip cells when rounded
         def ok(q: LngLat) -> bool:
-            if self.is_water(q) or (blocked and self.cell(q) in blocked):
+            if self.is_water(q) or (blocked is not None and (self.cell(q) in blocked or self.on_any_road(q))):
                 return False
             return clearance_m <= 0 or all(not self.is_water(_offset(q, b, clearance_m)) for b in range(0, 360, 45))
         p = (round(p[0], 6), round(p[1], 6))
@@ -870,21 +920,43 @@ class LandMask:
         return None
 
     def candidates(self, center: LngLat, samples: list[LngLat], max_m: float = 15_000.0, step_m: float = 120.0,
-                   wet: list[LngLat] | None = None, blocked: set[int] | None = None, sea: list[LngLat] | None = None):
-        """Shifts (east m, north m) of a rigid shape, nearest first, for which every `samples` point is dry and
-        outside the `blocked` cells (roads), every `wet` point is water (berths) and every `sea` point is navigable
-        sea (a channel). Callers re-check the shape actually rebuilt at the shifted centre and take the first."""
+                   wet: list[LngLat] | None = None, blocked: set[int] | None = None, sea: list[LngLat] | None = None,
+                   minor: bool = True, core: list[LngLat] | None = None):
+        """Shifts (east m, north m) of a rigid shape, nearest first, for which every `samples` point is dry and, with
+        `blocked`, clear of graph roads (and the `core` points of every road incl. minor ones when `minor`; without
+        `core` all samples are held to that), every `wet` point is water
+        (berths) and every `sea` point is navigable sea (a channel). Callers re-check the shape actually rebuilt at the
+        shifted centre and take the first that passes. Samples are tested lazily in a fixed shuffled order, so a bad
+        candidate is usually rejected after a handful of lookups."""
         k = math.cos(math.radians(center[1]))
+        fx, fy = 1.0 / (M_PER_DEG * k), 1.0 / M_PER_DEG
+        order = list(samples)
+        random.Random(7).shuffle(order)
+        strict = list(core) if core is not None else order
+        if core is not None:
+            random.Random(11).shuffle(strict)
+        is_water, cell, any_road = self.is_water, self.cell, self.on_any_road
 
-        def shifted(pts, de, dn):
-            return [(q[0] + de / (M_PER_DEG * k), q[1] + dn / M_PER_DEG) for q in pts]
-
-        def good(de, dn):
-            if wet and not all(self.is_water(q) for q in shifted(wet, de, dn)):
-                return False
-            if sea and not all(self.wet_ok(q, True) for q in shifted(sea, de, dn)):
-                return False
-            return self.dry_ok(shifted(samples, de, dn), blocked)
+        def good(de: float, dn: float) -> bool:
+            dx, dy = de * fx, dn * fy
+            if wet:
+                for q in wet:
+                    if not is_water((q[0] + dx, q[1] + dy)):
+                        return False
+            if sea:
+                for q in sea:
+                    if not self.wet_ok((q[0] + dx, q[1] + dy), True):
+                        return False
+            for q in order:
+                r = (q[0] + dx, q[1] + dy)
+                if is_water(r) or (blocked is not None and cell(r) in blocked):
+                    return False
+            if blocked is not None and minor:
+                for q in strict:
+                    r = (q[0] + dx, q[1] + dy)
+                    if any_road(r) or cell(r) in blocked:
+                        return False
+            return True
         if good(0.0, 0.0):
             yield (0.0, 0.0)
         r = step_m
@@ -897,8 +969,14 @@ class LandMask:
                     yield (de, dn)
             r += step_m
 
-    def dry_ok(self, pts: list[LngLat], blocked: set[int] | None = None) -> bool:
-        return not any(self.is_water(q) or (blocked and self.cell(q) in blocked) for q in pts)
+    def dry_ok(self, pts: list[LngLat], blocked: set[int] | None = None, minor: bool = True, core: list[LngLat] | None = None) -> bool:
+        """All points dry; with `blocked` (road cells of the graphs) also clear of graph roads, and with `minor` the
+        `core` points (or all points when no core is given) clear of every road incl. minor ones."""
+        if any(self.is_water(q) or (blocked is not None and self.cell(q) in blocked) for q in pts):
+            return False
+        if blocked is None or not minor:
+            return True
+        return not any(self.on_any_road(q) or self.cell(q) in blocked for q in (core if core is not None else pts))
 
     def wet_ok(self, q: LngLat, sea_only: bool = False) -> bool:
         return self.is_water(q) and (not sea_only or self.sea is None or self.sea.is_water(q))
@@ -961,4 +1039,4 @@ def sea() -> SeaNet:
 def land() -> LandMask:
     """Land/water mask (lakes and rivers included) for placing sites and ground units."""
     sea_net = sea()  # outside _cached: the cache lock is not re-entrant
-    return _cached("land", lambda: LandMask(DATA_DIR / "land.bin", sea_net))
+    return _cached("land", lambda: LandMask(DATA_DIR / "land.bin", sea_net, DATA_DIR / "roads.bin"))

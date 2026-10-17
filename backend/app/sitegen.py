@@ -380,21 +380,17 @@ def _in_ring(p: LngLat, ring: list[LngLat]) -> bool:
     return inside
 
 
-def placement_samples(lay: SiteLayout, spacing_m: float = 50.0) -> tuple[list[LngLat], list[LngLat], list[LngLat]]:
-    """(dry, wet, sea): points that must be dry, road-free ground (the whole footprint: fence line and interior on a
-    `spacing_m` grid), points that must be water (a naval base's berths and boat pads, fine ~110 m mask) and points
-    that must be navigable sea (its channel out, routing mask) for this layout to make sense."""
-    if lay.kind == "navbase":
-        f = Frame(lay.center, lay.axis)
-        # land side up to 60 m short of the quay (the coastline cell quantisation is ~110 m)
-        dry = [f.p(u, v) for u in range(-650, -59, int(spacing_m)) for v in range(-520, 521, int(spacing_m))]
-        wet = [(s.lng, s.lat) for kind in ("berth", "pad") for s in lay.spots.get(kind, [])] + [f.p(240, 0), f.p(300, 0)]
-        return dry, wet, [f.p(600, 0), f.p(1500, 0)]
-    ring = lay.footprint
-    dry: list[LngLat] = []
+CORE_CLASSES = {"runway", "taxiway", "apron", "dispersal", "shelter", "hangar", "tower", "building", "radar", "bund",
+                "fuel_tank", "ammo_bunker", "barracks", "motorpool", "fuel_point", "warehouse"}
+
+
+def _sample_ring(ring: list, spacing_m: float) -> list[LngLat]:
+    """Ring outline every `spacing_m` plus the interior on a `spacing_m` grid (at least the centroid)."""
+    ring = [(p[0], p[1]) for p in ring]
+    out: list[LngLat] = []
     for a, b in zip(ring, ring[1:]):
         n = max(1, int(geo.haversine_m(a, b) / spacing_m))
-        dry += [(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n) for k in range(n)]
+        out += [(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n) for k in range(n)]
     lo_x, hi_x = min(p[0] for p in ring), max(p[0] for p in ring)
     lo_y, hi_y = min(p[1] for p in ring), max(p[1] for p in ring)
     dy = spacing_m / 111_195.0
@@ -404,10 +400,31 @@ def placement_samples(lay: SiteLayout, spacing_m: float = 50.0) -> tuple[list[Ln
         x = lo_x + dx / 2
         while x < hi_x:
             if _in_ring((x, y), ring):
-                dry.append((x, y))
+                out.append((x, y))
             x += dx
         y += dy
-    return dry, [], []
+    m = len(ring) - 1 if len(ring) > 1 and ring[0] == ring[-1] else len(ring)
+    out.append((sum(p[0] for p in ring[:m]) / m, sum(p[1] for p in ring[:m]) / m))
+    return out
+
+
+def placement_samples(lay: SiteLayout, spacing_m: float = 50.0) -> tuple[list[LngLat], list[LngLat], list[LngLat], list[LngLat]]:
+    """(dry, wet, sea, core) for this layout to make sense on the ground:
+    dry  - the whole footprint (fence line and interior on a `spacing_m` grid): dry land, clear of the national road
+           graph (a fenced base can still enclose a small road that was closed for it);
+    wet  - a naval base's berths and boat pads: water (fine ~110 m mask);
+    sea  - its channel out: navigable sea (routing mask);
+    core - built surfaces (runway, taxiways, aprons, shelters, buildings, tanks …) every ~35 m: clear of every road,
+           minor roads included."""
+    core = [q for f in lay.features if f["geometry"]["type"] == "Polygon" and f["properties"]["cls"] in CORE_CLASSES
+            for q in _sample_ring(f["geometry"]["coordinates"][0], 35.0)]
+    if lay.kind == "navbase":
+        f = Frame(lay.center, lay.axis)
+        # land side up to 60 m short of the quay (the coastline cell quantisation is ~110 m)
+        dry = [f.p(u, v) for u in range(-650, -59, int(spacing_m)) for v in range(-520, 521, int(spacing_m))]
+        wet = [(s.lng, s.lat) for kind in ("berth", "pad") for s in lay.spots.get(kind, [])] + [f.p(240, 0), f.p(300, 0)]
+        return dry, wet, [f.p(600, 0), f.p(1500, 0)], core
+    return _sample_ring(lay.footprint, spacing_m), [], [], core
 
 
 def ad_battery_positions(center: LngLat, axis: float, n: int, radius_m: float, seed: int) -> list[tuple[LngLat, float]]:
