@@ -17,6 +17,7 @@ import { CinematicCamera } from './camera'
 import { ModelLayer, modelZoomFor, type ModelInstance } from './models3d'
 import { addOverlays, circleRing, DETAIL_LAYERS, empty, nightPolygon, OVERLAY_LAYERS, setData } from './overlays'
 import { SpriteLayer } from './sprites'
+import { TerrainDrape } from './terrain'
 import { WindLayer } from './windfield'
 import { halo, headingArrow, natoSymbol, palette, trafficIcon, vesselColor } from './symbols'
 import { hasTopdown, topdownImage, TOPDOWN_FILL } from './topdown'
@@ -45,6 +46,7 @@ export class SceneController {
   readonly models = new ModelLayer()
   readonly wind = new WindLayer()
   readonly camera: CinematicCamera
+  private drape: TerrainDrape
   private raf = 0
   private styleReady = false
   private basemap: Basemap
@@ -82,6 +84,7 @@ export class SceneController {
       pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
     })
     this.camera = new CinematicCamera(this.map)
+    this.drape = new TerrainDrape(this.map)
     Object.assign(window as unknown as Record<string, unknown>, { __map: this.map, __scene: this, __store: store, __session: session })
     this.map.on('style.load', () => { this.styleReady = true; this.install(); store.set({ basemapStatus: this.basemap === 'offline' ? 'offline' : 'online' }) })
     this.map.on('error', e => {
@@ -192,9 +195,11 @@ export class SceneController {
       this.map.setTerrain({ source: 'dem', exaggeration: 1.2 })
       if (!this.map.getLayer('hillshade')) this.map.addLayer({ id: 'hillshade', type: 'hillshade', source: 'dem', paint: { 'hillshade-exaggeration': 0.35, 'hillshade-shadow-color': '#05080b', 'hillshade-highlight-color': '#3a4652', 'hillshade-accent-color': '#0d1318' } }, this.map.getLayer('road-minor') ? 'road-minor' : 'night')
       if (!this.map.getLayer('sky')) this.map.setSky({ 'sky-color': '#0b1520', 'horizon-color': '#1a2836', 'fog-color': '#0d151d', 'fog-ground-blend': 0.6, 'horizon-fog-blend': 0.6, 'sky-horizon-blend': 0.7, 'atmosphere-blend': 0.5 })
+      this.drape.enable() // one drape, invalidated only by sources it shows (see terrain.ts)
     } else {
       if (this.map.getTerrain()) this.map.setTerrain(null)
       if (this.map.getLayer('hillshade')) this.map.removeLayer('hillshade')
+      this.drape.disable()
     }
   }
 
