@@ -173,7 +173,9 @@ export class ModelLayer implements CustomLayerInterface {
       this.grow(b, b.count + 1)
       const mpp = (156543.03392 * Math.cos((lat * Math.PI) / 180)) / 2 ** zoom
       const lenPx = spec.lengthM / mpp
-      const boost = Math.min(MAX_BOOST[spec.domain] ?? 1, Math.max(1, (MIN_PX[spec.domain] ?? 0) / lenPx))
+      // Parked or taxiing aircraft sit in dense layouts: enlarge them far less than aircraft in flight.
+      const parked = (spec.domain === 'air' || spec.domain === 'rotor') && (altM === null || altM < 30)
+      const boost = parked ? Math.min(2.5, Math.max(1, 14 / lenPx)) : Math.min(MAX_BOOST[spec.domain] ?? 1, Math.max(1, (MIN_PX[spec.domain] ?? 0) / lenPx))
       const mPerUnit = 1 / (EARTH * Math.cos((lat * Math.PI) / 180))
       const sn = Math.sin((lat * Math.PI) / 180)
       const x = (lng + 180) / 360 - cx, y = 0.5 - Math.log((1 + sn) / (1 - sn)) / (4 * Math.PI) - cy

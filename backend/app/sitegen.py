@@ -177,7 +177,8 @@ def airbase(site_id: str, center: LngLat, axis: float, seed: int, shelters_per_h
             facing = (ang + 180) % 360  # open front faces the ring road
             ring_s = _shelter_ring(centre, facing)
             _poly(lay, ring_s, "infra", "shelter", f"Shelter {'AB'[h]}{k + 1}", 8, model="shelter", heading=facing)
-            lay.spots["shelter"].append(Spot(f"{site_id}:S{'AB'[h]}{k + 1}", centre[0], centre[1], facing, "shelter", front))
+            mouth = geo.destination(centre, facing, 21)  # parked nose-out on the shelter apron, ready to taxi
+            lay.spots["shelter"].append(Spot(f"{site_id}:S{'AB'[h]}{k + 1}", mouth[0], mouth[1], facing, "shelter", front))
         lay.routes[f"hub{h}"] = [p for p in ring]
         lay.routes[f"lane{h}"] = lane
     # QRA shelters by the runway threshold
@@ -185,7 +186,8 @@ def airbase(site_id: str, center: LngLat, axis: float, seed: int, shelters_per_h
         c = f.p(-L / 2 + 160 + k * 70, -150)
         facing = f.heading(0)
         _poly(lay, _shelter_ring(c, facing), "infra", "shelter", f"QRA shelter {k + 1}", 8, model="shelter", heading=facing, qra=True)
-        lay.spots["qra"].append(Spot(f"{site_id}:Q{k + 1}", c[0], c[1], facing, "qra", f.p(-L / 2 + 160 + k * 70, -60)))
+        mouth = geo.destination(c, facing, 21)
+        lay.spots["qra"].append(Spot(f"{site_id}:Q{k + 1}", mouth[0], mouth[1], facing, "qra", f.p(-L / 2 + 160 + k * 70, -60)))
     _poly(lay, f.rect(-L / 2 + 195, -95, 160, 40), "infra", "taxiway", "QRA pad")
     for k in range(8):
         p = f.p(-470 + k * 50, 330)

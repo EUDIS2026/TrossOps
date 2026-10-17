@@ -53,7 +53,7 @@ export function addOverlays(m: MlMap) {
   add({ id: 'analysis-fill', type: 'fill', source: 'analysis', maxzoom: 11.5, paint: { 'fill-color': ['get', 'color'], 'fill-outline-color': 'rgba(255,255,255,0.10)', 'fill-antialias': true,
     'fill-opacity': ['interpolate', ['linear'], ['zoom'], 9, 1, 11.3, 0] } })
   add({ id: 'analysis-3d', type: 'fill-extrusion', source: 'analysis', maxzoom: 11.5, layout: { visibility: 'none' }, paint: { 'fill-extrusion-color': ['get', 'color'], 'fill-extrusion-opacity': 0.72,
-    'fill-extrusion-height': ['*', ['get', 'height'], ['interpolate', ['exponential', 2], ['zoom'], 4, 1, 8, 0.25, 11, 0.02]] } })
+    'fill-extrusion-height': ['interpolate', ['exponential', 2], ['zoom'], 4, ['get', 'height'], 8, ['*', ['get', 'height'], 0.25], 11, ['*', ['get', 'height'], 0.02]] } })
   add({ id: 'areas-fill', type: 'fill', source: 'areas', paint: { 'fill-color': ['match', ['get', 'status'], 'uncovered', 'rgba(240,84,90,0.10)', 'degraded', 'rgba(242,180,58,0.08)', 'rgba(110,160,230,0.04)'] } })
   add({ id: 'areas-line', type: 'line', source: 'areas', paint: { 'line-color': ['match', ['get', 'status'], 'uncovered', palette.unavailable, 'degraded', palette.degraded, ['match', ['get', 'kind'], 'coverage_model', 'rgba(140,190,255,0.35)', 'rgba(140,190,255,0.75)']],
     'line-width': ['match', ['get', 'kind'], 'coverage_model', 1, 1.6], 'line-dasharray': ['match', ['get', 'kind'], 'restricted_zone', ['literal', [2, 2]], 'coverage_model', ['literal', [1, 3]], ['literal', [6, 2]]] } })
