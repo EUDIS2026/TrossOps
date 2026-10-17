@@ -7,7 +7,7 @@ import { eventMarker, palette } from './symbols'
 export const empty = (): GeoJSON.FeatureCollection => ({ type: 'FeatureCollection', features: [] })
 
 const SOURCES = ['areas', 'cables', 'predictions', 'prediction-rings', 'plans', 'route-preview', 'trails', 'interventions', 'reports', 'police', 'warnings',
-  'stations', 'wind', 'analysis', 'site-detail', 'site-points', 'labels', 'night', 'ranges', 'leaders', 'crisis', 'fires', 'traffic']
+  'stations', 'wind', 'analysis', 'site-detail', 'site-points', 'night', 'ranges', 'crisis', 'fires', 'traffic']
 
 export const OVERLAY_LAYERS: Record<string, string[]> = {
   'picture.areas': ['areas-fill', 'areas-line'],
@@ -26,7 +26,7 @@ export const OVERLAY_LAYERS: Record<string, string[]> = {
   'env.wind': ['wind'],
   'env.radar': ['radar'],
   'env.daylight': ['night'],
-  'picture.labels': ['labels'],
+  // 'picture.labels' (unit, site and live-traffic labels) is drawn by the GPU TextLayer, read per frame
 }
 export const DETAIL_LAYERS: Record<string, string[]> = {
   'detail.infra': ['site-footprint', 'site-surface', 'site-markings', 'site-centerline', 'site-buildings', 'site-buildings-flat', 'site-runway-label', 'site-taxi-lines'],
@@ -113,10 +113,7 @@ export function addOverlays(m: MlMap) {
   add({ id: 'traffic', type: 'circle', source: 'traffic', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 3.5, 12, 7], 'circle-color': ['match', ['get', 'type'], 'Olycka', '#f0545a', 'Hinder', '#f2b43a', 'Restriktion', '#c58bff', '#7aa6d8'], 'circle-stroke-color': '#0a0e12', 'circle-stroke-width': 1.5 } })
   add({ id: 'reports', type: 'symbol', source: 'reports', layout: { 'icon-image': ['concat', 'rep:', ['get', 'severity']], 'icon-size': ['interpolate', ['linear'], ['zoom'], 4, 0.55, 10, 0.85], 'icon-allow-overlap': true, 'symbol-sort-key': ['get', 'rank'] } })
   add({ id: 'police', type: 'symbol', source: 'police', layout: { 'icon-image': ['case', ['get', 'alert'], 'pol:alert', 'pol'], 'icon-size': ['interpolate', ['linear'], ['zoom'], 4, 0.45, 10, 0.8], 'icon-allow-overlap': true } })
-  add({ id: 'leaders', type: 'line', source: 'leaders', paint: { 'line-color': 'rgba(200,225,240,0.45)', 'line-width': 1 } })
-  add({ id: 'labels', type: 'symbol', source: 'labels', layout: {
-    'text-field': ['get', 'text'], 'text-font': FONT, 'text-size': ['case', ['get', 'agg'], 11, 10], 'text-offset': [0, 1.9], 'text-anchor': 'top', 'text-optional': true, 'symbol-sort-key': ['get', 'rank'],
-    'text-max-width': 14 }, paint: { 'text-color': ['get', 'color'], 'text-halo-color': 'rgba(8,11,14,0.95)', 'text-halo-width': 1.6 } })
+  // unit/site/traffic labels and declutter leaders follow moving symbols every frame: GPU layers in text.ts
 }
 
 export function setData(m: MlMap, id: string, fc: GeoJSON.FeatureCollection) { (m.getSource(id) as GeoJSONSource | undefined)?.setData(fc) }
