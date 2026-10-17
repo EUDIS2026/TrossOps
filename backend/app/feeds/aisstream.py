@@ -1,8 +1,10 @@
 """AISStream.io websocket adapter (terrestrial AIS, global, free key).
 
-Without `AISSTREAM_API_KEY` the feed reports `adapter-only`. With a key, and only in a long-lived process (`VERCEL`
-unset), a daemon thread subscribes to the Sweden + Baltic bounding box and keeps the latest position per MMSI in the
-same normalised vessel shape as Digitraffic (`source: "aisstream"`). The websocket library (`websockets`, shipped with
+Without `AISSTREAM_API_KEY` the feed reports `adapter-only`. With a key, in a long-lived process a daemon thread
+subscribes to the Sweden + Baltic bounding box and keeps the latest position per MMSI in the same normalised vessel
+shape as Digitraffic (`source: "aisstream"`). On a serverless host (`VERCEL` set) a refresh instead opens the stream
+for a short burst (BURST_S, at most once per BURST_EVERY_S), collects what arrives and closes, so each instance builds
+up its own picture without a background thread. The websocket library (`websockets`, shipped with
 `uvicorn[standard]`) is imported lazily inside the thread.
 """
 from __future__ import annotations
@@ -21,6 +23,8 @@ from .base import USER_AGENT, Feed, feeds_disabled, num, on_vercel
 STREAM_URL = "wss://stream.aisstream.io/v0/stream"
 POSITION_TYPES = ("PositionReport", "StandardClassBPositionReport", "ExtendedClassBPositionReport")
 FORGET_S = 1800.0
+BURST_S = 6.0
+BURST_EVERY_S = 60.0
 _TIME_RE = re.compile(r"(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?:\.(\d+))?")
 
 
@@ -57,6 +61,7 @@ class AisStreamFeed(Feed):
         self._connected = False
         self._messages = 0
         self._unavailable: str | None = None
+        self._last_burst = 0.0
 
     # -- message handling (pure, unit-testable) ------------------------------------------------------------------------
     def handle_message(self, msg: dict) -> dict | None:
@@ -117,8 +122,7 @@ class AisStreamFeed(Feed):
             self._unavailable = "websockets not installed (pip install websockets==17.2)"
             return
         backoff = 5.0
-        subscribe = json.dumps({"APIKey": key, "BoundingBoxes": [[[BBOX[1], BBOX[0]], [BBOX[3], BBOX[2]]]],
-                                "FilterMessageTypes": list(POSITION_TYPES) + ["ShipStaticData"]})
+        subscribe = self._subscribe_message(key)
         while not self._stop.is_set():
             got_any = False
             try:
@@ -142,8 +146,49 @@ class AisStreamFeed(Feed):
             self._stop.wait(backoff)
             backoff = min(backoff * 2, 300.0)
 
+    def _subscribe_message(self, key: str) -> str:
+        return json.dumps({"APIKey": key, "BoundingBoxes": [[[BBOX[1], BBOX[0]], [BBOX[3], BBOX[2]]]],
+                           "FilterMessageTypes": list(POSITION_TYPES) + ["ShipStaticData"]})
+
+    def _burst(self, key: str) -> None:
+        """Serverless mode: connect, collect for BURST_S seconds, disconnect. Never raises."""
+        try:
+            from websockets.sync.client import connect
+        except ImportError:
+            self._unavailable = "websockets not installed (pip install websockets==17.2)"
+            return
+        got = 0
+        try:
+            with connect(STREAM_URL, open_timeout=8, close_timeout=2, user_agent_header=USER_AGENT) as ws:
+                ws.send(self._subscribe_message(key))
+                end = time.time() + BURST_S
+                while time.time() < end:
+                    try:
+                        raw = ws.recv(timeout=max(0.1, end - time.time()))
+                    except TimeoutError:
+                        break
+                    msg = json.loads(raw)
+                    if "error" in msg:
+                        raise RuntimeError(str(msg["error"])[:200])
+                    if self.handle_message(msg):
+                        got += 1
+            if got:
+                self._fetched_at = self._last_ok = time.time()
+                self._last_error = None
+            else:
+                self._last_error, self._last_error_at = "burst received no positions in the box", time.time()
+        except Exception as exc:  # noqa: BLE001
+            self._last_error, self._last_error_at = f"{type(exc).__name__}: {exc}"[:300], time.time()
+
     def refresh(self, force: bool = False) -> None:
-        if feeds_disabled() or self.missing_credentials() or on_vercel():
+        if feeds_disabled() or self.missing_credentials():
+            return
+        if on_vercel():
+            with self._lock:
+                if force or time.time() - self._last_burst >= BURST_EVERY_S:
+                    self._last_burst = time.time()
+                    self._burst(os.environ["AISSTREAM_API_KEY"])
+                self._data = {"items": self.snapshot()}
             return
         if self._thread is None or not self._thread.is_alive():
             if self._unavailable:
@@ -161,7 +206,12 @@ class AisStreamFeed(Feed):
         if feeds_disabled() or self.missing_credentials():
             return super()._status_value()
         if on_vercel():
-            return "adapter-only", False, "websocket stream needs a long-lived process; not started on Vercel"
+            if self._last_ok:
+                stale = time.time() - self._last_ok > BURST_EVERY_S * 5
+                return ("partial" if stale else "working"), stale, f"serverless bursts of {BURST_S:.0f} s; {len(self._vessels)} vessels held by this instance"
+            if self._last_error:
+                return "blocked", False, self._last_error
+            return "adapter-only", False, "no burst yet in this instance"
         if self._unavailable:
             return "blocked", False, self._unavailable
         if self._thread is None:

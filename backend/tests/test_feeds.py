@@ -307,11 +307,21 @@ def test_aisstream_adapter_only_without_key_and_message_parsing(monkeypatch):
     outside = {**msg, "MetaData": {**msg["MetaData"]},
                "Message": {"PositionReport": {**msg["Message"]["PositionReport"], "Longitude": 40.0}}}
     assert stream.handle_message(outside) is None
-    # with a key but on Vercel: never starts a thread
+    # with a key but on Vercel: no thread, a short burst per refresh instead (stubbed: no network in tests)
     monkeypatch.setenv("AISSTREAM_API_KEY", "k")
     monkeypatch.setenv("VERCEL", "1")
+    bursts = []
+
+    def fake_burst(key):
+        bursts.append(key)
+        stream._fetched_at = stream._last_ok = time.time()
+
+    monkeypatch.setattr(stream, "_burst", fake_burst)
     st = stream.get()
-    assert st["status"] == "adapter-only" and "Vercel" in st["note"] and stream._thread is None
+    assert bursts == ["k"] and stream._thread is None
+    assert st["status"] == "working" and "serverless" in st["note"] and len(st["items"]) == 1
+    stream.refresh()
+    assert bursts == ["k"]  # rate-limited to one burst per BURST_EVERY_S
 
 
 # ---- SMHI ---------------------------------------------------------------------------------------------------------------------
@@ -550,3 +560,16 @@ def test_krisinfo_decodes_mislabelled_latin1():
     from app.feeds.krisinfo import decode_json
     assert decode_json('[{"Headline": "Här ska vården stärkas"}]'.encode("cp1252"))[0]["Headline"] == "Här ska vården stärkas"
     assert decode_json('[{"Headline": "Här"}]'.encode("utf-8"))[0]["Headline"] == "Här"
+
+
+def test_firms_csv_parsing_and_errors():
+    from app.feeds.base import FeedError
+    from app.feeds.firms import parse_csv
+    rows = parse_csv("latitude,longitude,bright_ti4,scan,track,acq_date,acq_time,satellite,instrument,confidence,version,bright_ti5,frp,daynight\n"
+                     "59.1,17.2,330.1,0.4,0.4,2026-10-16,0130,N20,VIIRS,n,2.0NRT,280.0,4.2,N\n", "VIIRS_NOAA20_NRT")
+    assert rows[0]["lng"] == 17.2 and rows[0]["frpMw"] == 4.2 and rows[0]["acquired"] == "2026-10-16T01:30:00Z"
+    try:
+        parse_csv("Invalid MAP_KEY.", "VIIRS_NOAA20_NRT")
+        assert False
+    except FeedError:
+        pass
