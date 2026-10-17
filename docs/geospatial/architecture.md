@@ -2,7 +2,7 @@
 
 ```
  scripts/data/build_geonet.py ─► backend/data/geo: national.json.gz (roads) · city_*.json.gz (streets)
-                                                   sea.bin (sea mask + routing grid) · land.bin (land/water mask)
+                                                   sea.bin (sea mask + routing grid) · land.bin + roads.bin (placement masks)
                          │                                       real public feeds (backend/app/feeds, TTL-cached)
  orbat.py (order of battle, placement) + sitegen.py (layouts)    adsb.lol/OpenSky · Digitraffic/AISStream · SMHI
    + motion.py (declared motion)                                 Open-Meteo · RainViewer · Polisen · Krisinformation
@@ -47,12 +47,15 @@ Full route list and payload types: [api-contracts.md](api-contracts.md).
 
 `backend/data/geo/land.bin` is a ~110 m land/water raster over Sweden built from every OpenStreetMap water polygon
 (sea, lakes, rivers, ponds, docks; OpenFreeMap z11 tiles) by `scripts/data/build_geonet.py`; outside the fetched tiles
-it falls back to the sea mask in `sea.bin`. `geonet.LandMask` answers `is_water`, `nearest_dry`, `leg_dry` and
+it falls back to the sea mask in `sea.bin`. `roads.bin` adds a mask of every road class (incl. minor roads, z12)
+around sites and parked units. `geonet.LandMask` answers `is_water`, `nearest_dry`, `leg_dry` and
 rasterises road networks into cells. The world uses it as follows (`orbat.py`):
 
-- **Sites** (`_place_site`): the declared position (town + offset) is only a seed. The whole layout footprint must be
-  on dry ground clear of road cells; naval bases also need their berths in water and a channel in navigable sea. The
-  nearest fitting position is searched (axis turned if needed); road cells are accepted only when nothing else fits.
+- **Sites** (`_place_site`): the declared position (town + offset) is only a seed. Built surfaces (runways, taxiways,
+  aprons, shelters, buildings) must be clear of every road in `roads.bin`, and the fenced footprint must avoid water
+  and national roads; naval bases also need their berths in water and a channel in navigable sea. The
+  nearest fitting position is searched (axis turned if needed), preferring ground free of every road, then free of
+  graph roads, then merely dry.
 - **Parked and dispersed ground units** (`on_ground`, `in_field`): snapped to the nearest dry, road-free point.
   Columns and patrol loops stay on the road network; ground paths cross water only on roads (bridges, ferries).
 - **Ships** (`at_sea`): harbour positions need sea with ~150 m of water around them; ships leave through their base's

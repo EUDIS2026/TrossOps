@@ -13,7 +13,7 @@ Scene reads carry `worldRevision` and accept `at` (scenario seconds) for replay 
 | `GET /api/health` | status, clock, rule / entity / formation counts, `feeds` (router loaded) | `mode: synthetic` |
 | `GET /api/clock` | epoch, `nowS`, `serverNow`, speed, revisions | `Clock` |
 | `GET /api/views` | roles → modes → layers, layer catalogue, rule catalogue, input channels, region scope, exclusive groups | `Views`; drives the whole UI |
-| `GET /api/world` | order of battle with declared motion, shared route geometry, sites, areas, cables, committed plans | `WorldCatalog`; refetch only when `catalogRevision` changes |
+| `GET /api/world` | order of battle with declared motion, shared route geometry, sites, areas, cables, committed plans | `WorldCatalog`; refetch only when `catalogRevision` changes; pre-encoded with a weak ETag (`If-None-Match` → 304), as are `/api/views` and site layouts |
 | `GET /api/sites/{site_id}/layout` | synthetic site layout (GeoJSON features, parking spots, runway, footprint) | `SiteLayout`; 404 unknown site |
 | `GET /api/scene/snapshot?at&role` | status rows, observed rows, areas, alerts, interventions, predictions, inputs, events, KPIs, layer attention, rule trace, priorities, fusion, deception | `Snapshot`; `statusColumns` names the `StatusRow` columns; 404 unknown role |
 | `GET /api/scene/entities?at` | compact rows `[id, lng, lat, altM, headingDeg, speedMps, condition]` | `KinematicsTick`; what stream ticks carry |

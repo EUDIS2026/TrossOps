@@ -150,8 +150,9 @@ def test_views_reference_only_existing_layers():
 
 def test_every_layer_has_a_render_path_in_the_frontend(engine):
     """A layer is drawn by a native overlay (OVERLAY_LAYERS), a site-detail layer (DETAIL_LAYERS), the entity renderer
-    (catalog entities carry `layer`), the live-traffic renderer (`live.*`), the analysis surface (`analysis.*`) or the
-    unknown-track filter (`track.unknown`). Anything else is a switch that does nothing."""
+    (catalog entities carry `layer`), a dedicated scene renderer switched by id (`on.has('picture.labels')`), the
+    live-traffic renderer (`live.*`), the analysis surface (`analysis.*`) or the unknown-track filter (`track.unknown`).
+    Anything else is a switch that does nothing."""
     from app import views
     overlay, detail = ts_record_keys("OVERLAY_LAYERS"), ts_record_keys("DETAIL_LAYERS")
     assert overlay and detail
@@ -159,7 +160,10 @@ def test_every_layer_has_a_render_path_in_the_frontend(engine):
     assert overlay <= ids, f"OVERLAY_LAYERS has keys the API does not define: {overlay - ids}"
     assert detail <= ids, f"DETAIL_LAYERS has keys the API does not define: {detail - ids}"
     entity_layers = {e["layer"] for e in engine.catalog()["entities"] if e.get("layer")}
-    orphans = sorted(i for i in ids if i not in overlay | detail | entity_layers and not i.startswith(("live.", "analysis.")) and i != "track.unknown")
+    # layers with a dedicated renderer that the scene switches by id, e.g. `on.has('picture.labels')` (GPU text layer)
+    scene_src = "\n".join(f.read_text(encoding="utf-8") for f in (ROOT / "frontend" / "src" / "scene").glob("*.ts"))
+    switched = set(re.findall(r"\.has\('([a-z_]+\.[a-z_]+)'\)", scene_src))
+    orphans = sorted(i for i in ids if i not in overlay | detail | entity_layers | switched and not i.startswith(("live.", "analysis.")) and i != "track.unknown")
     assert not orphans, f"layers with no renderer: {orphans}"
 
 

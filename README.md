@@ -95,7 +95,7 @@ Shortcuts: `/` search · `L` layers · `A` alerts · `D` decisions · `S` time &
 ## Check
 
 ```powershell
-cd backend;  $env:TROSSOPS_FEEDS="off"; python -m pytest -q            # 152 tests, no network
+cd backend;  $env:TROSSOPS_FEEDS="off"; python -m pytest -q            # 166 tests, no network
 cd frontend; npm run typecheck; npm test; npm run build                # 72 unit tests
 cd frontend; $env:BROWSER_CHANNEL="msedge"; npm run verify             # browser smoke, needs API + UI running
 ```
