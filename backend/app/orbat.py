@@ -28,7 +28,7 @@ from . import geo, sitegen
 from .motion import MotionSpec, Path, densify, racetrack
 
 ROUTE_CACHE = FsPath(__file__).resolve().parents[1] / "data" / "world_routes.json.gz"
-ROUTE_CACHE_VERSION = 10  # 7: sites on dry road-free ground (berths in the sea); columns and loops on the network
+ROUTE_CACHE_VERSION = 11  # 11: plausibility pass (field units by roads, HG in own county, re-seeded sites); 7: sites on dry road-free ground (berths in the sea); columns and loops on the network
 
 # Public reference points (city centres, coastal and sea waypoints), [lng, lat].
 P: dict[str, tuple[float, float]] = {
@@ -125,8 +125,8 @@ SITES: list[SiteDef] = [
     SiteDef("garrison-vast", "Garrison Väst", "garrison", "skovde", (3, -2), 0, "Brigade West", ["armour", "training"], sidc="SFGPIB----H-"),
     SiteDef("garrison-gotland", "Garrison Gotland", "garrison", "visby", (4, -6), 30, "Battlegroup Gotland", ["mech_infantry", "air_defence"], sidc="SFGPIB----H-"),
     SiteDef("navbase-syd", "Naval Base Syd", "navbase", "karlskrona", (3, -2.5), 160, "Naval Flotilla South", ["corvette", "mine_warfare", "submarine", "fuel"], sidc="SFGPIBN-----", layer="sites.sea"),
-    SiteDef("navbase-ost", "Naval Base Öst", "navbase", "nynashamn", (2.5, -1.5), 120, "Naval Flotilla East", ["patrol_boat", "amphibious", "fuel"], sidc="SFGPIBN-----", layer="sites.sea"),
-    SiteDef("navbase-vast", "Naval Station Väst", "navbase", "goteborg", (-3.15, -19.0), 260, "Naval Station West", ["patrol_boat", "coast_guard"], sidc="SFGPIBN-----", layer="sites.sea"),
+    SiteDef("navbase-ost", "Naval Base Öst", "navbase", "nynashamn", (2.26, 10.14), 90, "Naval Flotilla East", ["patrol_boat", "amphibious", "fuel"], sidc="SFGPIBN-----", layer="sites.sea"),
+    SiteDef("navbase-vast", "Naval Station Väst", "navbase", "goteborg", (-11.24, 9.67), 200, "Naval Station West", ["patrol_boat", "coast_guard"], sidc="SFGPIBN-----", layer="sites.sea"),
     SiteDef("depot-mitt", "Central Depot Mitt", "depot", "orebro", (6, 4), 0, "Logistics Regiment", ["ammunition", "spares", "fuel"], sidc="SFGPIRP-----", layer="sites.logistics"),
     SiteDef("depot-norr", "Depot Norr", "depot", "ostersund", (3, -3), 0, "Logistics Regiment", ["fuel", "spares", "winter"], sidc="SFGPIRP-----", layer="sites.logistics"),
     SiteDef("depot-syd", "Depot Syd", "depot", "vaxjo", (-5, 2), 0, "Logistics Regiment", ["ammunition", "fuel"], sidc="SFGPIRP-----", layer="sites.logistics"),
@@ -348,9 +348,37 @@ def urban(p: tuple[float, float], margin_km: float = 0.0) -> str | None:
 FIELD_CLASSES = {"secondary", "tertiary"}
 
 
-def beside(cache: "RouteCache", anchor: tuple[float, float], bearing: float, dist_m: float) -> tuple[float, float]:
+def road_reachable(mask, p: tuple[float, float], roads: set[int], max_cells: int = 45) -> bool:
+    """Can a road of the routing graphs (`roads`: national, city and island networks) be reached from p over dry
+    ground within ~max_cells land-mask cells (~110 m each)? Minor roads do not count: an islet can have its own
+    tracks and still be cut off from the network. False for anything on such an island."""
+    c0 = mask.cell(p)
+    if c0 < 0:
+        return False
+    r0, q0 = divmod(c0, mask.w)
+    seen, frontier = {c0}, [c0]
+    while frontier:
+        nxt = []
+        for c in frontier:
+            r, q = divmod(c, mask.w)
+            if c in roads:
+                return True
+            for rr, qq in ((r + 1, q), (r - 1, q), (r, q + 1), (r, q - 1)):
+                n = rr * mask.w + qq
+                if abs(rr - r0) > max_cells or abs(qq - q0) > max_cells or n in seen:
+                    continue
+                seen.add(n)
+                if mask.is_dry((mask.lng0 + (qq + 0.5) * mask.dlng, mask.lat1 - (rr + 0.5) * mask.dlat)):
+                    nxt.append(n)
+        frontier = nxt
+    return False
+
+
+def beside(cache: "RouteCache", anchor: tuple[float, float], bearing: float, dist_m: float,
+           outside: list[tuple[float, float]] | None = None) -> tuple[float, float]:
     """A dry, road-free point about dist_m from `anchor` toward `bearing`, reachable from the anchor on foot (the
-    straight line does not cross water): the first bearing in 30-degree steps that works. Cached."""
+    straight line does not cross water) and not inside the `outside` ring (a site's fence): the first bearing in
+    30-degree steps that works. Cached."""
     def compute():
         mask = land_mask()
         if mask is None:
@@ -361,11 +389,13 @@ def beside(cache: "RouteCache", anchor: tuple[float, float], bearing: float, dis
             q = mask.nearest_dry(geo.destination(anchor, bearing + turn, dist_m), dist_m, blocked=blocked)
             if q is None:
                 continue
+            if outside and geo.point_in_ring(q, outside):
+                continue
             first = first or q
             if mask.leg_dry(anchor, q, 25.0):
                 return [q]
         return [first or on_ground(cache, anchor)]
-    return cache.get(RouteCache.key("beside", anchor, bearing, dist_m), compute)[0]
+    return cache.get(RouteCache.key("beside", anchor, bearing, dist_m, bool(outside)), compute)[0]
 
 
 def field_anchor(cache: "RouteCache", center: tuple[float, float], radius_m: float = 3000.0) -> tuple[float, float]:
@@ -554,19 +584,32 @@ class Orbat:
             roads = road_cells_near(c0)
             turns = (0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180) if s.kind == "navbase" else (0, 45, -45, 90)
             # prefer ground free of every road (incl. minor roads), then free of graph roads, then just dry
+            # Within a pass the nearest fit over *all* axis turns wins (the declared axis on ties): taking the first
+            # axis that fits anywhere put naval bases 35-55 km from their town when a turned layout fitted at 12-16 km.
             for blocked, minor in ((roads, True), (roads, False), (None, False)):
+                best: tuple[float, tuple[float, float], float] | None = None
                 for turn in turns:
                     axis = (s.axis + turn) % 360
+                    limit = best[0] if best else (60_000.0 if s.kind == "navbase" else 25_000.0)
                     dry, wet, sea, core = sitegen.placement_samples(self._layout(s, c0, axis))
-                    for tried, (de, dn) in enumerate(mask.candidates(c0, dry, max_m=60_000.0 if s.kind == "navbase" else 25_000.0, wet=wet or None, blocked=blocked, sea=sea or None, minor=minor, core=core)):
+                    misfits = 0
+                    for de, dn in mask.candidates(c0, dry, max_m=limit, wet=wet or None, blocked=blocked, sea=sea or None, minor=minor, core=core):
+                        if best and math.hypot(de, dn) >= best[0]:
+                            break
                         c = mask.shift(c0, de, dn)
                         c = (round(c[0], 6), round(c[1], 6))
                         # the layout rebuilt at c (local metric frame) must pass exactly, not just the shifted samples
                         dry2, wet2, sea2, core2 = sitegen.placement_samples(self._layout(s, c, axis))
-                        if mask.dry_ok(dry2, blocked, minor, core2) and all(mask.is_water(q) for q in wet2) and all(mask.wet_ok(q, True) for q in sea2):
-                            return [c, (axis, 0.0)]
-                        if tried > 200:  # near a coastline the shifted samples and the rebuilt layout can disagree
+                        if not (mask.dry_ok(dry2, blocked, minor, core2) and all(mask.is_water(q) for q in wet2) and all(mask.wet_ok(q, True) for q in sea2)):
+                            misfits += 1
+                            if misfits > 200:  # near a coastline the shifted samples and the rebuilt layout can disagree
+                                break
+                            continue
+                        if road_reachable(mask, c, roads):  # not on a roadless islet (those do not use up the budget)
+                            best = (math.hypot(de, dn), c, axis)
                             break
+                if best:
+                    return [best[1], (best[2], 0.0)]
             return [c0, (s.axis, 0.0)]
         got = self.cache.get(RouteCache.key("site", s.id, s.kind, c0, s.axis), compute)
         return got[0], got[1][0]
@@ -1025,7 +1068,7 @@ class Orbat:
         for k in edges:
             a, b = ring[k], ring[(k + 1) % (len(ring) - 1)]
             mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
-            posts.append(beside(self.cache, (round(mid[0], 6), round(mid[1], 6)), round(geo.bearing_deg(lay.center, mid), 1), 150.0))
+            posts.append(beside(self.cache, (round(mid[0], 6), round(mid[1], 6)), round(geo.bearing_deg(lay.center, mid), 1), 150.0, ring))
         return posts
 
     def _home_guard(self) -> None:
