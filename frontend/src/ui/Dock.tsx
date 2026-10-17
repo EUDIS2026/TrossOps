@@ -1,7 +1,7 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import type { Alert, InputReport, LayerDef } from '../contracts/types'
 import { actions, EMPTY, EMPTY_OBJ, layerOn, store, useApp, type Basemap, type Panel } from '../core/store'
-import { ago, channelLabel, fmtTime, useRuntime } from './context'
+import { ago, channelLabel, Fact, fmtTime, useRuntime } from './context'
 import { Icon } from './icons'
 
 const DOCK: { panel: Panel; icon: keyof typeof Icon; label: string; key: string }[] = [
@@ -122,14 +122,45 @@ export function InputRow({ i }: { i: InputReport }) {
 function FeedPanel() {
   const alerts = useApp(s => s.snapshot?.alerts ?? EMPTY)
   const inputs = useApp(s => s.snapshot?.inputs ?? EMPTY)
-  const [tab, setTab] = useState<'alerts' | 'feed'>('alerts')
+  const [tab, setTab] = useState<'alerts' | 'feed' | 'public'>('alerts')
   const open = alerts.filter(a => !a.acknowledged)
   return <>
-    <div className="seg full"><button aria-pressed={tab === 'alerts'} onClick={() => setTab('alerts')}>Alerts · {open.length}</button><button aria-pressed={tab === 'feed'} onClick={() => setTab('feed')}>Reports · {inputs.length}</button></div>
-    <div className="list">
+    <div className="seg full"><button aria-pressed={tab === 'alerts'} onClick={() => setTab('alerts')}>Alerts · {open.length}</button><button aria-pressed={tab === 'feed'} onClick={() => setTab('feed')}>Reports · {inputs.length}</button>
+      <button aria-pressed={tab === 'public'} onClick={() => setTab('public')}>Public</button></div>
+    {tab === 'public' ? <PublicInfo /> : <div className="list">
       {tab === 'alerts' ? (alerts.length ? alerts.map(a => <AlertRow key={a.id} a={a} />) : <div className="quiet">Nothing needs attention.</div>)
         : [...inputs].reverse().map(i => <InputRow key={i.id} i={i} />)}
-    </div>
+    </div>}
+  </>
+}
+
+/** Real public information: Krisinformation news and VMA, notable police events, space weather. */
+function PublicInfo() {
+  const [data, setData] = useState<{ crisis: Record<string, unknown>[]; vma: number; police: Record<string, unknown>[]; kp: Record<string, unknown> | null } | null>(null)
+  useEffect(() => {
+    let alive = true
+    void import('../core/api').then(async ({ api }) => {
+      const [c, p, k] = await Promise.allSettled([api.crisis(), api.police(), api.space()])
+      if (!alive) return
+      const crisis = c.status === 'fulfilled' ? c.value.items ?? [] : []
+      const kw = (x: Record<string, unknown>) => ((x.keywords as string[] | undefined) ?? []).length
+      const police = p.status === 'fulfilled' ? (p.value.items ?? []).slice().sort((a, b) => kw(b) - kw(a) || String(b.datetime).localeCompare(String(a.datetime))).slice(0, 12) : []
+      setData({ crisis, vma: crisis.filter(x => x.kind === 'vma').length, police, kp: k.status === 'fulfilled' ? (k.value as unknown as Record<string, unknown>) : null })
+    })
+    return () => { alive = false }
+  }, [])
+  if (!data) return <div className="quiet">Loading public sources…</div>
+  return <>
+    <div className="section"><h4>Krisinformation <span>{data.vma ? `${data.vma} active VMA` : 'no active VMA'}</span></h4><div className="list">
+      {data.crisis.map(x => <div key={String(x.id)} className="note"><b>{String(x.headline)}</b><br /><small>{String(x.preamble ?? '').slice(0, 220)}</small><br /><small className="quiet">{ago(x.published as string)} · {((x.areas as string[] | undefined) ?? []).join(', ')}</small></div>)}
+      {!data.crisis.length && <div className="quiet">No national crisis news in the last three days.</div>}
+    </div></div>
+    <div className="section"><h4>Police events <span>polisen.se</span></h4><div className="list">
+      {data.police.map(x => <button key={String(x.id)} className="item" onClick={() => actions.select('police', String(x.id), { lng: x.lng, lat: x.lat, name: x.name, type: x.type })}>
+        <span className={`dot ${((x.keywords as string[] | undefined) ?? []).length ? 'warning' : 'info'}`} /><span><strong>{String(x.name)}</strong><small>{String(x.summary ?? '')}</small></span></button>)}
+    </div></div>
+    {data.kp && <div className="section"><h4>Space weather <span>NOAA SWPC</span></h4>
+      <div className="facts"><Fact k="Kp now" v={String(data.kp.kp ?? '—')} /><Fact k="Kp max 24 h" v={String(data.kp.max24h ?? '—')} /></div><small className="quiet">{String(data.kp.impact ?? data.kp.note ?? '')}</small></div>}
   </>
 }
 

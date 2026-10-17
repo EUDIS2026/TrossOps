@@ -345,6 +345,7 @@ class Orbat:
         self._sites()
         self.formation("fm-sweden", "National forces", "SE", "SFGPU-------", "service", None, "forces", "land")
         self._air_force()
+        self._base_support()
         self._army()
         self._navy()
         self._home_guard()
@@ -552,6 +553,28 @@ class Orbat:
             self.add(Node(f"uav-{k + 1:02d}", f"UAV {k + 1:02d}", "fixed_wing", "air", "air.uav", "SFAPMFQ-----", "own", "fm-uav", None, f"U{k + 1}",
                           "Tactical UAV", "uav", gar, self.region_of(c), ["isr"], crew=0, range_km=150,
                           motion=MotionSpec("path", path=Path(path_pts, speeds), start_s=60 + k * 700, hold_s=1200, mode="loop", airborne=True, fuel_start=100, fuel_burn_per_km=0.05)))
+
+    def _base_support(self) -> None:
+        """Life inside each airbase: fuel bowsers shuttling between the fuel farm and the flight line on the base
+        roads, and a security patrol driving the perimeter road."""
+        for s in SITES:
+            if s.kind != "airbase":
+                continue
+            lay = self.layouts[s.id]
+            fid = f"fm-sup-{s.id}"
+            self.formation(fid, f"{s.label} base support", "Base Sp", "SFGPUSS----D", "platoon", "fm-air", "land.logistics", "land", region=self.region_of(self.sites[s.id]))
+            bowser = self.shared_route(f"r-bowser-{s.id}", densify(lay.routes["bowser"], 40), 7.0)
+            for k in range(2):
+                n = self.vehicle(f"{s.id}-fuel{k + 1}", f"{s.label} bowser {k + 1}", "fuel_truck", fid, self.region_of(self.sites[s.id]),
+                                 MotionSpec("path", path=bowser, route_id=f"r-bowser-{s.id}", start_s=k * 340, hold_s=420, mode="pingpong"))
+                n.site = s.id
+                n.capabilities = ["fuel", "supply"]
+            ring = [(p[0], p[1]) for p in lay.footprint]
+            patrol = self.shared_route(f"r-perimeter-{s.id}", densify(ring, 60), 9.0)
+            n = self.vehicle(f"{s.id}-sec1", f"{s.label} security patrol", "truck", fid, self.region_of(self.sites[s.id]),
+                             MotionSpec("path", path=patrol, route_id=f"r-perimeter-{s.id}", start_s=60, mode="loop"))
+            n.model, n.platform, n.site = "car", "Security patrol vehicle", s.id
+            n.capabilities = ["guard"]
 
     def _heli_sortie(self, base: str, spot: sitegen.Spot, legs: list[tuple[float, float]]) -> Path:
         s = (spot.lng, spot.lat)

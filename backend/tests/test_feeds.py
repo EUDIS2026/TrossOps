@@ -544,3 +544,9 @@ def test_real_traffic_pattern_indicators(monkeypatch):
     titles = [i.title for i in ins]
     assert any("TEST VESSEL slow over" in t for t in titles) and any("TEST01 flying an orbit" in t for t in titles)
     assert all("not an assessment" in i.text for i in ins if {"cable", "orbit"} & set(i.tags))
+
+
+def test_krisinfo_decodes_mislabelled_latin1():
+    from app.feeds.krisinfo import decode_json
+    assert decode_json('[{"Headline": "Här ska vården stärkas"}]'.encode("cp1252"))[0]["Headline"] == "Här ska vården stärkas"
+    assert decode_json('[{"Headline": "Här"}]'.encode("utf-8"))[0]["Headline"] == "Här"

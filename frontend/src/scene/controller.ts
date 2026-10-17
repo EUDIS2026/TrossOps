@@ -60,6 +60,7 @@ export class SceneController {
   private layoutsDirty = false
   private envAt: Record<string, number> = {}
   private onLayers = new Set<string>()
+  private counties: Promise<GeoJSON.FeatureCollection> | null = null
   private disposed = false
 
   constructor(container: HTMLElement, private session: Session) {
@@ -270,6 +271,15 @@ export class SceneController {
         this.analysisKey = ''
       }),
       job('night', 60_000, on.has('env.daylight'), async () => { setData(m, 'night', nightPolygon(new Date())) }),
+      job('crisis', 300_000, on.has('civil.crisis'), async () => {
+        // Active VMA (public warnings) are issued for named counties: draw those counties from the bundled SCB borders.
+        const [r, counties] = await Promise.all([api.crisis(), this.counties ??= fetch('/data/sweden_counties.geojson').then(x => x.json() as Promise<GeoJSON.FeatureCollection>)])
+        const norm = (x: string) => x.toLowerCase().replace(/ län$/, '').replace(/s$/, '').trim()
+        const vma = (r.items ?? []).filter(i => i.kind === 'vma')
+        const hit = (f: GeoJSON.Feature) => vma.find(v => ((v.areas as string[] | undefined) ?? []).some(a => norm(a) === norm(String(f.properties?.name ?? ''))))
+        const feats = counties.features.filter(f => hit(f)).map(f => ({ ...f, properties: { ...f.properties, headline: hit(f)?.headline } }))
+        setData(m, 'crisis', { type: 'FeatureCollection', features: feats })
+      }),
     ])
   }
 

@@ -7,7 +7,7 @@ import { eventMarker, palette } from './symbols'
 export const empty = (): GeoJSON.FeatureCollection => ({ type: 'FeatureCollection', features: [] })
 
 const SOURCES = ['areas', 'cables', 'predictions', 'prediction-rings', 'plans', 'route-preview', 'trails', 'interventions', 'reports', 'police', 'warnings',
-  'stations', 'wind', 'analysis', 'site-detail', 'site-points', 'labels', 'night', 'ranges', 'leaders']
+  'stations', 'wind', 'analysis', 'site-detail', 'site-points', 'labels', 'night', 'ranges', 'leaders', 'crisis']
 
 export const OVERLAY_LAYERS: Record<string, string[]> = {
   'picture.areas': ['areas-fill', 'areas-line'],
@@ -19,6 +19,7 @@ export const OVERLAY_LAYERS: Record<string, string[]> = {
   'picture.reports': ['reports'],
   'civil.police_events': ['police'],
   'env.warnings': ['warnings-fill', 'warnings-line'],
+  'civil.crisis': ['crisis-fill', 'crisis-line'],
   'env.obs': ['stations-dot', 'stations-label'],
   'env.wind': ['wind'],
   'env.radar': ['radar'],
@@ -48,6 +49,8 @@ export function addOverlays(m: MlMap) {
   // environment under everything operational
   add({ id: 'night', type: 'fill', source: 'night', paint: { 'fill-color': '#000814', 'fill-opacity': 0.32 } }, firstLabel)
   add({ id: 'warnings-fill', type: 'fill', source: 'warnings', paint: { 'fill-color': ['match', ['get', 'level'], 'red', 'rgba(240,70,80,0.18)', 'orange', 'rgba(250,150,50,0.16)', 'yellow', 'rgba(250,215,70,0.12)', 'rgba(150,170,190,0.06)'] } }, firstLabel)
+  add({ id: 'crisis-fill', type: 'fill', source: 'crisis', paint: { 'fill-color': 'rgba(240,70,90,0.16)' } }, firstLabel)
+  add({ id: 'crisis-line', type: 'line', source: 'crisis', paint: { 'line-color': '#f0465a', 'line-width': 2 } })
   add({ id: 'warnings-line', type: 'line', source: 'warnings', paint: { 'line-color': ['match', ['get', 'level'], 'red', '#f04650', 'orange', '#fa9632', 'yellow', '#fad746', '#8a9aa8'], 'line-width': 1.2, 'line-dasharray': [3, 2] } })
   // Analysis surfaces are a national/regional tool: they fade out before street zoom so they never cover a site.
   add({ id: 'analysis-fill', type: 'fill', source: 'analysis', maxzoom: 11.5, paint: { 'fill-color': ['get', 'color'], 'fill-outline-color': 'rgba(255,255,255,0.10)', 'fill-antialias': true,

@@ -69,6 +69,16 @@ def normalise(item: dict, kind: str) -> dict:
             "event": field(item, "event")}
 
 
+
+def decode_json(raw: bytes):
+    """Krisinformation declares UTF-8 but has been seen serving Latin-1 bytes; decode strictly, then fall back."""
+    import json
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        return json.loads(raw.decode("cp1252"))
+
+
 class KrisinfoFeed(Feed):
     id = "krisinformation"
     label = "Krisinformation.se news and VMA"
@@ -82,7 +92,7 @@ class KrisinfoFeed(Feed):
     def _get(self, client: httpx.Client, url: str) -> list:
         r = client.get(url)
         r.raise_for_status()
-        body = r.json()
+        body = decode_json(r.content)
         if not isinstance(body, list):
             raise FeedError("unexpected payload (expected a list)")
         return body
