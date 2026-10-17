@@ -125,3 +125,10 @@ scripts/data   reproducible build of the road, street, sea and land/water artefa
 docs           product · briefs · decisions (ADR-001, ADR-002) · geospatial (architecture, api-contracts, rules,
                integration-matrix, demo, verification)
 ```
+
+## Licence
+
+[PolyForm Noncommercial 1.0.0](LICENSE) — source-available, free for noncommercial use (personal, research,
+educational, charitable and government institutions). Commercial use needs a separate licence from the copyright
+holder. Required notice: Copyright Shafir Khajo (https://trossops.se). Map data and public feeds keep their own
+licences (see the integrations table).
