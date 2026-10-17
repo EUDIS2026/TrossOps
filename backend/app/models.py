@@ -33,6 +33,8 @@ Channel = Literal[
     "allied_liaison",        # partner nation liaison officer
     "head_of_state_directive",
 ]
+# Channels only the real public feeds produce (feed_inputs.py); operators cannot post them through /api/inputs.
+FeedChannel = Literal["police_event", "crisis_info"]
 AuthorLevel = Literal[
     "soldier", "platoon", "company", "battalion", "brigade", "regional", "joint", "national",
     "civil_authority", "operator", "sensor", "media", "allied", "head_of_state",
@@ -116,7 +118,7 @@ class SceneEntity(BaseModel):
 
 class InputReport(BaseModel):
     id: str
-    channel: Channel
+    channel: Channel | FeedChannel
     authorLevel: AuthorLevel
     author: str
     receivedAt: str
