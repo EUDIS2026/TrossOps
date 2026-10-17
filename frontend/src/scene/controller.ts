@@ -9,7 +9,7 @@ setWorkerUrl(maplibreWorkerUrl)
 import type { Condition, LiveAircraft, LiveVessel, SiteLayout, Snapshot } from '../contracts/types'
 import { api } from '../core/api'
 import type { Session } from '../core/session'
-import { actions, analysisLayer, currentMode, layerOn, store, type AppState, type Basemap, type SelectionKind } from '../core/store'
+import { actions, analysisLayer, currentMode, INITIAL_CAMERA, layerOn, store, type AppState, type Basemap, type SelectionKind } from '../core/store'
 import { mercX, mercY, type WNode, type WorldModel } from '../core/world'
 import * as A from './analysis'
 import { ATTRIBUTION, TERRAIN_TILEJSON, styleFor } from './basemap'
@@ -78,7 +78,7 @@ export class SceneController {
     const s = store.get()
     this.basemap = s.basemap
     this.map = new MlMap({
-      container, style: styleFor(s.basemap), center: [s.camera.lng, s.camera.lat], zoom: s.camera.zoom, pitch: s.camera.pitch, bearing: s.camera.bearing,
+      container, style: styleFor(s.basemap), center: [s.camera.lng, s.camera.lat], zoom: s.camera === INITIAL_CAMERA ? widthFitZoom(s.camera.zoom, container) : s.camera.zoom, pitch: s.camera.pitch, bearing: s.camera.bearing,
       minZoom: 2.5, maxZoom: 19, maxPitch: 80, attributionControl: { compact: true, customAttribution: ATTRIBUTION[s.basemap] }, cancelPendingTileRequestsWhileZooming: false,
       canvasContextAttributes: { antialias: true },
       // High-DPI laptops (125-200 %) multiply the fill cost of terrain, hillshade and 3D; 1.5 keeps text crisp.
@@ -143,7 +143,7 @@ export class SceneController {
     if (s.views !== p.views || s.roleId !== p.roleId || s.modeId !== p.modeId || s.layerOverrides !== p.layerOverrides || s.threeD !== p.threeD) this.applyLayers(s)
     const modeChanged = (s.modeId !== p.modeId || s.roleId !== p.roleId) && p.modeId !== undefined
     if (s.threeD !== p.threeD) this.apply3d(s, modeChanged)
-    if (modeChanged) { const mode = currentMode(s); if (mode) this.camera.fly({ ...mode.camera, pitch: s.threeD ? Math.max(mode.camera.pitch, 50) : mode.camera.pitch }, s.reducedMotion) }
+    if (modeChanged) { const mode = currentMode(s); if (mode) this.camera.fly({ ...fitCamera(mode.camera, this.map), pitch: s.threeD ? Math.max(mode.camera.pitch, 50) : mode.camera.pitch }, s.reducedMotion) }
     if (s.terrain !== p.terrain) this.applyTerrain(s)
     if (s.snapshot !== p.snapshot && s.snapshot) this.applySnapshot(s.snapshot)
     if (s.selected !== p.selected) this.applySelection(s)
@@ -403,7 +403,7 @@ export class SceneController {
     }
   }
 
-  flyToMode() { const mode = currentMode(store.get()); if (mode) this.camera.fly(mode.camera, store.get().reducedMotion) }
+  flyToMode() { const mode = currentMode(store.get()); if (mode) this.camera.fly(fitCamera(mode.camera, this.map), store.get().reducedMotion) }
 
   // ---- frame loop ---------------------------------------------------------------------------------------------
   private frame(now: number) {
@@ -737,6 +737,19 @@ export class SceneController {
     if (e.affiliation === 'unknown') { const d = s.snapshot?.deception[e.id]; if (d) lines.push(`deception: ${d.band} (${Math.round(d.probability * 100)} %)`) }
     return { title: e.label, lines }
   }
+}
+
+/** The opening national view, fitted to the screen width (a phone sees all of Sweden too). */
+function widthFitZoom(zoom: number, container: HTMLElement): number {
+  return zoom - Math.min(1.5, Math.max(0, Math.log2(1680 / (container.clientWidth || window.innerWidth || 1680))))
+}
+
+/** Mode cameras are authored for a ~1680 px wide map; on a narrower map zoom out so the same area stays in view
+ * (one zoom level per halving of the width, at most 1.5 levels). */
+function fitCamera<T extends { zoom: number }>(cam: T, map: MlMap): T {
+  const w = map.getContainer().clientWidth || 1680
+  const out = Math.min(1.5, Math.max(0, Math.log2(1680 / w)))
+  return { ...cam, zoom: cam.zoom - out }
 }
 
 function dr(lng: number, lat: number, heading: number | null, speed: number | null, dt: number): [number, number] {

@@ -42,12 +42,15 @@ export interface AppState {
   analysisInfo: { surface: string; unit: string; legend: { color: string; label: string }[]; note: string; cells: number } | null
 }
 
+/** The opening national view (the scene fits its zoom to the screen width while this object is untouched). */
+export const INITIAL_CAMERA = { zoom: 4.7, pitch: 0, bearing: 0, lng: 17.2, lat: 61.2 }
+
 const initial: AppState = {
   views: null, worldReady: false, catalogRevision: 0, roleId: 'national_commander', modeId: 'overview', layerOverrides: {}, threeD: false, terrain: false,
   basemap: 'operational', basemapStatus: 'loading', snapshot: null, selected: null, hovered: null, follow: false, tab: 'overview',
   clock: { mode: 'live', rate: 1, paused: false, offsetS: 0, t: 0 }, stream: 'connecting',
   panels: { layers: false, feed: false, decisions: false, scenario: false, sources: false, help: false, search: false, report: false },
-  camera: { zoom: 4.7, pitch: 0, bearing: 0, lng: 17.2, lat: 61.2 }, detail: null, plan: null, route: null,
+  camera: INITIAL_CAMERA, detail: null, plan: null, route: null,
   live: { aircraft: [], vessels: [], at: 0 }, sources: [], error: null, toast: null, busy: false,
   reducedMotion: typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches, cinematic: true, analysisInfo: null,
 }
