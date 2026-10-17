@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>TrossOps model preview</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #0b0f14; color: #cfd8e3; font: 12px/1.3 system-ui, sans-serif; overflow: hidden; }
+      #hud { position: fixed; top: 8px; left: 10px; z-index: 2; background: rgba(10, 14, 20, 0.7); padding: 6px 10px; border-radius: 4px; }
+      #hud a { color: #8fb3ff; margin-right: 6px; }
+      .lbl { color: #e6edf5; background: rgba(8, 12, 18, 0.65); padding: 1px 5px; border-radius: 3px; white-space: nowrap; font-size: 11px; text-align: center; }
+      .lbl small { color: #8a99ab; display: block; font-size: 10px; }
+    </style>
+  </head>
+  <body>
+    <div id="hud"></div>
+    <script type="module" src="/src/scene/three/preview.ts"></script>
+  </body>
+</html>
