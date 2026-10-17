@@ -114,10 +114,10 @@ class SiteDef:
 SITES: list[SiteDef] = [
     SiteDef("hq-joint", "Joint Operations HQ", "hq", "enkoping", (6, 3), 30, "Joint Staff", ["command", "comms_hub"], sidc="SFGPUH----H-", layer="sites.land"),
     SiteDef("airbase-norr", "Airbase Norr", "airbase", "lulea", (-9, 4), 140, "Air Wing North", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
-    SiteDef("airbase-syd", "Airbase Syd", "airbase", "kristianstad", (9, -3), 10, "Air Wing South", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
-    SiteDef("airbase-vast", "Airbase Väst", "airbase", "lidkoping", (6, 3), 50, "Air Wing West", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
+    SiteDef("airbase-syd", "Airbase Syd", "airbase", "kristianstad", (2.7, 9.4), 10, "Air Wing South", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
+    SiteDef("airbase-vast", "Airbase Väst", "airbase", "lidkoping", (-6.1, -1.2), 50, "Air Wing West", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
     SiteDef("airbase-mitt", "Airbase Mitt", "airbase", "uppsala", (-5, 6), 10, "Air Wing Centre", ["transport", "aew", "fuel"], sidc="SFGPIBA---H-", layer="sites.air"),
-    SiteDef("airbase-ost", "Heliport Öst", "airbase", "linkoping", (-4, 4), 110, "Helicopter Wing", ["helicopter", "maintenance", "fuel"], sidc="SFGPIBA---H-", layer="sites.air"),
+    SiteDef("airbase-ost", "Heliport Öst", "airbase", "linkoping", (-14.2, 10.3), 110, "Helicopter Wing", ["helicopter", "maintenance", "fuel"], sidc="SFGPIBA---H-", layer="sites.air"),
     SiteDef("garrison-norr", "Garrison Norr", "garrison", "boden", (-4, 2), 90, "Brigade North", ["armour", "logistics", "medical"], sidc="SFGPIB----H-"),
     SiteDef("garrison-fjall", "Garrison Fjäll", "garrison", "arvidsjaur", (2, 1), 70, "Brigade North", ["rangers", "winter"], sidc="SFGPIB----H-"),
     SiteDef("garrison-mitt", "Garrison Mitt", "garrison", "enkoping", (-8, -4), 20, "Brigade Centre", ["mech_infantry", "logistics"], sidc="SFGPIB----H-"),
@@ -126,7 +126,7 @@ SITES: list[SiteDef] = [
     SiteDef("garrison-gotland", "Garrison Gotland", "garrison", "visby", (4, -6), 30, "Battlegroup Gotland", ["mech_infantry", "air_defence"], sidc="SFGPIB----H-"),
     SiteDef("navbase-syd", "Naval Base Syd", "navbase", "karlskrona", (3, -2.5), 160, "Naval Flotilla South", ["corvette", "mine_warfare", "submarine", "fuel"], sidc="SFGPIBN-----", layer="sites.sea"),
     SiteDef("navbase-ost", "Naval Base Öst", "navbase", "nynashamn", (2.5, -1.5), 120, "Naval Flotilla East", ["patrol_boat", "amphibious", "fuel"], sidc="SFGPIBN-----", layer="sites.sea"),
-    SiteDef("navbase-vast", "Naval Station Väst", "navbase", "goteborg", (-9, -4), 260, "Naval Station West", ["patrol_boat", "coast_guard"], sidc="SFGPIBN-----", layer="sites.sea"),
+    SiteDef("navbase-vast", "Naval Station Väst", "navbase", "goteborg", (-3.15, -19.0), 260, "Naval Station West", ["patrol_boat", "coast_guard"], sidc="SFGPIBN-----", layer="sites.sea"),
     SiteDef("depot-mitt", "Central Depot Mitt", "depot", "orebro", (6, 4), 0, "Logistics Regiment", ["ammunition", "spares", "fuel"], sidc="SFGPIRP-----", layer="sites.logistics"),
     SiteDef("depot-norr", "Depot Norr", "depot", "ostersund", (3, -3), 0, "Logistics Regiment", ["fuel", "spares", "winter"], sidc="SFGPIRP-----", layer="sites.logistics"),
     SiteDef("depot-syd", "Depot Syd", "depot", "vaxjo", (-5, 2), 0, "Logistics Regiment", ["ammunition", "fuel"], sidc="SFGPIRP-----", layer="sites.logistics"),
@@ -564,7 +564,7 @@ class Orbat:
                         dry2, wet2, sea2 = sitegen.placement_samples(self._layout(s, c, axis))
                         if mask.dry_ok(dry2, blocked) and all(mask.is_water(q) for q in wet2) and all(mask.wet_ok(q, True) for q in sea2):
                             return [c, (axis, 0.0)]
-                        if tried > 40:
+                        if tried > 200:  # near a coastline the shifted samples and the rebuilt layout can disagree
                             break
             return [c0, (s.axis, 0.0)]
         got = self.cache.get(RouteCache.key("site", s.id, s.kind, c0, s.axis), compute)

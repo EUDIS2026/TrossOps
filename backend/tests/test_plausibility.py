@@ -161,3 +161,13 @@ def test_sites_and_field_units_are_not_cut_off_on_islands(world):
     cut_off += [e.base.id for e, p in _free_statics(world) if not _reaches_road(land, roads, p, 45)]
     assert cut_off == []
 
+
+
+def test_sites_stay_near_their_declared_seed(world):
+    """The declared town + offset is a seed; placement may move it to fit, but not to another district."""
+    moved = []
+    for s in orbat.SITES:
+        d = geo.haversine_m(orbat.pt(s.near, *s.offset_km), world.sites[s.id])
+        if d > 10_000:
+            moved.append((s.id, round(d / 1000, 1)))
+    assert moved == []
