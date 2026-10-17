@@ -4,13 +4,15 @@ Primary: adsb.lol (`/v2/lat/{lat}/lon/{lon}/dist/{nm}`, max 250 nm, ODbL). Swede
 overlapping 250 nm circles merged by ICAO hex.
 
 adsb.lol rate-limits per IP (measured 2026-10: a burst of ~3 requests, then roughly one request per 10 s; excess gets
-HTTP 429, or 420 when sustained). After a 420/429 the feed pauses adsb.lol requests for 30 s. So a cold start fetches all circles at once and every later refresh fetches only the stalest
+HTTP 429, or 420 when sustained). After a 420/429 the feed pauses adsb.lol requests for ~30 s, doubling (with
+jitter) while the limit persists, up to ~4 min. A cold start fetches all circles at once and every later refresh fetches only the stalest
 circle; the published picture merges the latest snapshot of each circle by absolute position time, and `seenS` is the
 age of each position at publication. A full cycle therefore takes ~3 x TTL.
 
 Fallback when no circle snapshot is available: OpenSky Network `states/all` over a bounding box (anonymous, or OAuth2
 client credentials when OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET are set), called at most once a minute because
-anonymous OpenSky access is credit-limited.
+anonymous OpenSky access is credit-limited. OpenSky silently drops connections from many cloud ranges (Vercel included),
+so its calls use a 3 s connect timeout and a timeout pauses OpenSky for 10 min with a note that says why.
 
 Also keeps a per-process position trail per aircraft and derives GNSS-integrity samples from NIC / NACp.
 """
@@ -18,21 +20,30 @@ from __future__ import annotations
 
 import math
 import os
+import random
 import threading
 import time
 from collections import deque
 
 import httpx
 
-from .base import FPM_TO_MPS, FT_TO_M, KT_TO_MPS, Feed, FeedError, describe, iso, num, parallel
+from .base import FPM_TO_MPS, FT_TO_M, KT_TO_MPS, Feed, FeedError, describe, iso, num, on_vercel, parallel
 
 ADSB_LOL_URL = "https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{nm}"
 CIRCLES: tuple[tuple[float, float, int], ...] = ((56.5, 15.0, 250), (60.5, 18.5, 250), (65.5, 19.5, 250))
 CIRCLE_MAX_AGE_S = 120.0  # a circle snapshot older than this is dropped from the merged picture
 POSITION_MAX_AGE_S = 90.0  # aircraft whose last position is older than this are dropped
 OPENSKY_MIN_GAP_S = 60.0
-OPENSKY_FAIL_BACKOFF_S = 600.0
-RATE_LIMIT_COOLDOWN_S = 30.0  # after HTTP 420/429 from adsb.lol, send nothing for this long
+OPENSKY_FAIL_BACKOFF_S = 600.0  # after a timeout / refused connection / rejected credentials
+OPENSKY_RETRY_S = 120.0  # after any other failure (HTTP 429 credit limit, 5xx, bad payload)
+# OpenSky answers in < 1 s when reachable; from many cloud ranges (AWS, hence Vercel) it silently drops connections.
+# A short connect timeout detects that in seconds instead of holding the request for the full client timeout.
+OPENSKY_TIMEOUT = httpx.Timeout(8.0, connect=3.0)
+OPENSKY_CLOUD_HINT = ("no answer from OpenSky from this cloud IP; OpenSky blocks many cloud-provider address ranges, so "
+                      "the keyed gap fill rarely works on serverless hosts")
+RATE_LIMIT_COOLDOWN_S = 30.0  # after HTTP 420/429 from adsb.lol, send nothing for this long ...
+RATE_LIMIT_COOLDOWN_MAX_S = 240.0  # ... doubling while the limit persists, capped here
+RATE_LIMIT_JITTER = 0.25  # +/- fraction, so instances that were limited together do not retry in lockstep
 OPENSKY_URL = "https://opensky-network.org/api/states/all"
 OPENSKY_BBOX = {"lamin": 54.5, "lomin": 9.5, "lamax": 69.5, "lomax": 31.0}
 OPENSKY_TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
@@ -158,7 +169,9 @@ class AdsbFeed(Feed):
         self._circle_errors: dict[int, str] = {}
         self._opensky_cache: tuple[float, list[dict]] | None = None
         self._opensky_fail_until = 0.0
+        self._opensky_last_error: str | None = None
         self._cooldown_until = 0.0
+        self._rate_limit_strikes = 0
 
     def reset(self) -> None:
         super().reset()
@@ -166,9 +179,17 @@ class AdsbFeed(Feed):
         self._circle_errors.clear()
         self._opensky_cache = None
         self._opensky_fail_until = 0.0
+        self._opensky_last_error = None
         self._cooldown_until = 0.0
+        self._rate_limit_strikes = 0
         with self._trail_lock:
             self._trails.clear()
+
+    def _rate_limited(self) -> None:
+        """Exponential, jittered pause after HTTP 420/429 (30 s, 60 s, 120 s, 240 s ... while the limit persists)."""
+        self._rate_limit_strikes += 1
+        base = min(RATE_LIMIT_COOLDOWN_S * 2 ** (self._rate_limit_strikes - 1), RATE_LIMIT_COOLDOWN_MAX_S)
+        self._cooldown_until = time.time() + base * random.uniform(1 - RATE_LIMIT_JITTER, 1 + RATE_LIMIT_JITTER)
 
     # -- upstreams ----------------------------------------------------------------------------------------------------
     def _circle(self, client: httpx.Client, circle: tuple[float, float, int]) -> list[dict]:
@@ -186,7 +207,8 @@ class AdsbFeed(Feed):
             return None
         if self._token and self._token[1] > time.time() + 30:
             return self._token[0]
-        r = client.post(OPENSKY_TOKEN_URL, data={"grant_type": "client_credentials", "client_id": cid, "client_secret": secret})
+        r = client.post(OPENSKY_TOKEN_URL, data={"grant_type": "client_credentials", "client_id": cid, "client_secret": secret},
+                        timeout=OPENSKY_TIMEOUT)
         r.raise_for_status()
         body = r.json()
         self._token = (body["access_token"], time.time() + float(body.get("expires_in", 1800)))
@@ -195,12 +217,39 @@ class AdsbFeed(Feed):
     def _opensky(self, client: httpx.Client) -> list[dict]:
         token = self._opensky_token(client)
         headers = {"Authorization": f"Bearer {token}"} if token else None
-        r = client.get(OPENSKY_URL, params={**OPENSKY_BBOX, "extended": 1}, headers=headers)
+        r = client.get(OPENSKY_URL, params={**OPENSKY_BBOX, "extended": 1}, headers=headers, timeout=OPENSKY_TIMEOUT)
         r.raise_for_status()
         body = r.json()
         now_s = num(body.get("time")) or time.time()
         out = [normalise_opensky(sv, now_s) for sv in body.get("states") or []]
         return [a for a in out if a]
+
+    def _opensky_states(self, client: httpx.Client, now: float) -> list[dict]:
+        """OpenSky states, at most one request per OPENSKY_MIN_GAP_S; none at all for OPENSKY_FAIL_BACKOFF_S after a
+        failure (raises FeedError with the remembered reason instead of waiting on a blocked upstream again)."""
+        if self._opensky_cache is not None and now - self._opensky_cache[0] < OPENSKY_MIN_GAP_S:
+            return self._opensky_cache[1]
+        if now < self._opensky_fail_until:
+            raise FeedError(f"paused {self._opensky_fail_until - now:.0f} s after: {self._opensky_last_error}")
+        self._opensky_cache = (time.time(), self._opensky(client))
+        return self._opensky_cache[1]
+
+    def _opensky_error(self, exc: Exception) -> str:
+        """Human-readable OpenSky failure; starts the long backoff unless this already was the paused short-circuit."""
+        if isinstance(exc, FeedError) and str(exc).startswith("paused"):
+            return str(exc)
+        msg, pause = describe(exc), OPENSKY_RETRY_S
+        if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError)):
+            pause = OPENSKY_FAIL_BACKOFF_S
+            if on_vercel():
+                msg = f"{msg}: {OPENSKY_CLOUD_HINT}"
+        elif isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (400, 401, 403) \
+                and "auth." in str(exc.request.url):
+            pause = OPENSKY_FAIL_BACKOFF_S
+            msg = f"{msg}: OpenSky rejected OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET"
+        self._opensky_last_error = msg
+        self._opensky_fail_until = time.time() + pause
+        return msg
 
     def _due_circles(self, now: float) -> list[int]:
         if now < self._cooldown_until:
@@ -213,15 +262,20 @@ class AdsbFeed(Feed):
     def fetch(self, client: httpx.Client) -> dict:
         now = time.time()
         due = self._due_circles(now)
+        limited = ok = False
         for i, acs, err in parallel(lambda i: self._circle(client, CIRCLES[i]), due):
             if err:
                 self._circle_errors[i] = describe(err)
-                if isinstance(err, httpx.HTTPStatusError) and err.response.status_code in (420, 429):
-                    self._cooldown_until = time.time() + RATE_LIMIT_COOLDOWN_S
+                limited = limited or (isinstance(err, httpx.HTTPStatusError) and err.response.status_code in (420, 429))
                 continue
+            ok = True
             self._circle_errors.pop(i, None)
             parsed = [a for a in (normalise_adsb_lol(raw) for raw in acs) if a and a["id"]]
             self._snapshots[i] = (time.time(), parsed)
+        if limited:
+            self._rate_limited()
+        elif ok:
+            self._rate_limit_strikes = 0
 
         now = time.time()
         merged: dict[str, tuple[float, dict]] = {}
@@ -243,23 +297,21 @@ class AdsbFeed(Feed):
         gap_note = None
         if not live:
             try:
-                if self._opensky_cache is None or now - self._opensky_cache[0] >= OPENSKY_MIN_GAP_S:
-                    self._opensky_cache = (time.time(), self._opensky(client))
-                merged = {a["id"]: (now - (a["seenS"] or 0.0), a) for a in self._opensky_cache[1]}
+                states = self._opensky_states(client, now)
+                merged = {a["id"]: (now - (a["seenS"] or 0.0), a) for a in states}
                 source = "opensky"
                 partial.append("adsb.lol unavailable; serving OpenSky fallback")
             except Exception as exc:  # noqa: BLE001
-                raise FeedError("; ".join(partial + [f"opensky: {describe(exc)}"])) from exc
+                raise FeedError("; ".join(partial + [f"opensky: {self._opensky_error(exc)}"])) from exc
         elif len(live) < len(CIRCLES) and now < self._opensky_fail_until:
-            partial.append(f"opensky gap fill: paused {self._opensky_fail_until - now:.0f} s after a failure")
+            partial.append(f"opensky gap fill: paused {self._opensky_fail_until - now:.0f} s after: {self._opensky_last_error}")
         elif len(live) < len(CIRCLES) and os.environ.get("OPENSKY_CLIENT_ID") and os.environ.get("OPENSKY_CLIENT_SECRET"):
             # keyed OpenSky fills only the circles adsb.lol could not serve (shared serverless IPs get rate-limited)
             gaps = [CIRCLES[i] for i in range(len(CIRCLES)) if i not in live]
             try:
-                if self._opensky_cache is None or now - self._opensky_cache[0] >= OPENSKY_MIN_GAP_S:
-                    self._opensky_cache = (time.time(), self._opensky(client))
+                states = self._opensky_states(client, now)
                 filled = 0
-                for a in self._opensky_cache[1]:
+                for a in states:
                     if a["id"] not in merged and any(_in_circle(a, c) for c in gaps):
                         merged[a["id"]] = (now - (a["seenS"] or 0.0), a)
                         filled += 1
@@ -267,8 +319,7 @@ class AdsbFeed(Feed):
                 partial = [p for p in partial if not p.startswith("adsb.lol")]  # gaps and cooldown covered
                 gap_note = f"{len(gaps)} adsb.lol circle(s) filled by OpenSky ({filled} aircraft)"
             except Exception as exc:  # noqa: BLE001
-                self._opensky_fail_until = time.time() + OPENSKY_FAIL_BACKOFF_S  # e.g. cloud IPs that OpenSky drops
-                partial.append(f"opensky gap fill: {describe(exc)}")
+                partial.append(f"opensky gap fill: {self._opensky_error(exc)}")
         items = []
         for pos_t, ac in merged.values():
             items.append({**ac, "seenS": round(max(0.0, now - pos_t), 1)})

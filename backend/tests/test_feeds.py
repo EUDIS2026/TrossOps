@@ -194,6 +194,65 @@ def test_adsb_staggers_circles_after_cold_start_and_reports_rate_limit():
     assert "paused" in feeds.ADSB.get()["lastError"]
 
 
+def test_adsb_rate_limit_pause_doubles_with_jitter_and_resets(monkeypatch):
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr(adsb.time, "time", lambda: clock["t"])
+    monkeypatch.setattr(adsb.random, "uniform", lambda lo, hi: hi)  # worst-case jitter: +25 %
+    state = {"code": 429}
+    calls: list = []
+    feeds.ADSB.transport = mock([("api.adsb.lol", lambda r: httpx.Response(state["code"], json=fixture("adsb_lol.json")))], calls)
+    pauses = []
+    for _ in range(5):
+        feeds.ADSB.refresh(force=True)
+        pauses.append(round(feeds.ADSB._cooldown_until - clock["t"], 1))
+        clock["t"] = feeds.ADSB._cooldown_until + 0.1
+    assert pauses == [37.5, 75.0, 150.0, 300.0, 300.0]  # 30 s doubling, capped at 240 s, x1.25 jitter
+    state["code"] = 200
+    feeds.ADSB.refresh(force=True)
+    assert feeds.ADSB._rate_limit_strikes == 0 and feeds.ADSB.get()["status"] == "working"
+    state["code"] = 420
+    feeds.ADSB.refresh(force=True)
+    assert feeds.ADSB._cooldown_until - clock["t"] == 37.5  # back to the first step after a success
+
+
+def test_opensky_cloud_block_is_detected_fast_and_explained(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("OPENSKY_CLIENT_ID", "id")
+    monkeypatch.setenv("OPENSKY_CLIENT_SECRET", "secret")
+    timeouts: list = []
+    calls: list = []
+
+    def lol(request):
+        if "/lat/60.5/" in str(request.url):
+            return httpx.Response(420, text="slow down")
+        return httpx.Response(200, json=fixture("adsb_lol.json"))
+
+    def dropped(request):
+        timeouts.append(request.extensions["timeout"]["connect"])
+        raise httpx.ConnectTimeout("timed out", request=request)
+
+    feeds.ADSB.transport = mock([("api.adsb.lol", lol), ("opensky-network.org", dropped)], calls)
+    body = feeds.ADSB.get()
+    assert timeouts == [3.0]  # short connect timeout, not the 8 s client default
+    assert body["status"] == "partial" and body["count"] == 7
+    assert "connect timeout after 3 s from auth.opensky-network.org" in body["lastError"]
+    assert "blocks many cloud-provider address ranges" in body["lastError"]
+    calls.clear()
+    feeds.ADSB._snapshots.pop(1, None)
+    feeds.ADSB._cooldown_until = 0.0
+    feeds.ADSB.refresh(force=True)
+    assert not [c for c in calls if "opensky" in c]  # paused for 10 min: no second wait on a blocked upstream
+    assert "opensky gap fill: paused 6" in feeds.ADSB.get()["lastError"] and "cloud-provider" in feeds.ADSB.get()["lastError"]
+
+
+def test_describe_reports_timeout_phase_limit_and_host():
+    from app.feeds.base import describe
+    req = httpx.Request("GET", "https://example.org/x", extensions={"timeout": {"connect": 2.5, "read": 8, "write": 8, "pool": 8}})
+    assert describe(httpx.ConnectTimeout("t", request=req)) == "connect timeout after 2.5 s from example.org"
+    assert describe(httpx.ReadTimeout("t", request=req)) == "read timeout after 8 s from example.org"
+    assert describe(httpx.ReadTimeout("t")) == "read timeout after 8 s"
+
+
 def test_adsb_falls_back_to_opensky():
     feeds.ADSB.transport = mock([("api.adsb.lol", 429), ("opensky-network.org/api/states/all", "opensky.json")])
     body = feeds.ADSB.get()

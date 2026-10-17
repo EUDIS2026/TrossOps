@@ -100,7 +100,15 @@ def describe(exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         return f"HTTP {exc.response.status_code} from {exc.request.url.host}"
     if isinstance(exc, httpx.TimeoutException):
-        return f"timeout after {TIMEOUT_S:.0f} s"
+        phase = {httpx.ConnectTimeout: "connect", httpx.ReadTimeout: "read", httpx.WriteTimeout: "write",
+                 httpx.PoolTimeout: "pool"}.get(type(exc), "read")
+        limit, host = TIMEOUT_S, None
+        try:
+            limit = float((exc.request.extensions.get("timeout") or {}).get(phase) or TIMEOUT_S)
+            host = exc.request.url.host
+        except RuntimeError:  # exception raised without an attached request
+            pass
+        return f"{phase} timeout after {limit:g} s" + (f" from {host}" if host else "")
     if isinstance(exc, httpx.HTTPError):
         return f"{type(exc).__name__}: {exc}"[:200]
     return f"{type(exc).__name__}: {exc}"[:200]
