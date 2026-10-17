@@ -103,6 +103,7 @@ export interface PlanResult { status: string; method: string; objective?: number
 export interface RouteOption {
   id: string; label: string; path: Vertex[]; speeds: number[]; distanceKm: number; etaMin: number; fuelUsePct: number; fuelAfterPct: number | null
   exposureKm: number; exposure: string[]; risk: number; feasible: boolean; notes: string[]; basedOn: string[]; airborne: boolean; score: number
+  terrain?: { groundM: (number | null)[]; distanceM?: number[]; minM: number | null; maxM: number | null; climbM?: number; minClearanceM?: number | null }
 }
 export interface RoutePlan { entityId: string; from: number[]; to: number[]; options: RouteOption[]; recommended: string; method: string; worldRevision: number; atS: number }
 export interface Clock { epoch: string; nowS: number; serverNow: string; speed: number; worldRevision: number; catalogRevision: number }

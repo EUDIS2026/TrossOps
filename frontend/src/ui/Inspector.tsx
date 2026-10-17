@@ -111,6 +111,7 @@ function RoutePlanner({ n }: { n: WNode }) {
     {r.options.map((o: RouteOption) => <button key={o.id} className="route-opt" aria-pressed={route.option === o.id} onClick={() => store_setOption(o.id)}>
       <div className="option-head"><strong>{o.label}</strong>{r.recommended === o.id && <span className="tag accent">recommended</span>}{!o.feasible && <span className="tag crit">infeasible</span>}</div>
       <div className="option-meta"><span><b>{o.distanceKm}</b> km</span><span>ETA <b>{Math.round(o.etaMin)} min</b></span><span>fuel <b>{o.fuelUsePct} %</b>{o.fuelAfterPct !== null && ` → ${o.fuelAfterPct} %`}</span><span>risk <b>{Math.round(o.risk * 100)} %</b></span></div>
+      {o.terrain && <TerrainProfile o={o} />}
       {o.notes.map(x => <small key={x} className="warn-text">{x}</small>)}
       <small className="quiet">{o.basedOn.join(' · ')}</small>
     </button>)}
@@ -122,6 +123,26 @@ function RoutePlanner({ n }: { n: WNode }) {
     <small className="quiet">{r.method}</small>
   </div>
 }
+/** Ground elevation under the route (Lantmäteriet); airborne options also draw the flight altitude. */
+function TerrainProfile({ o }: { o: RouteOption }) {
+  const t = o.terrain!
+  const ground = t.groundM
+  const alt = o.airborne ? o.path.map(v => v[2] ?? null) : null
+  const vals = [...ground, ...(alt ?? [])].filter((v): v is number => v !== null)
+  if (vals.length < 2) return null
+  const lo = Math.min(0, ...vals), hi = Math.max(...vals) * 1.05 + 1
+  const W = 260, H = 44
+  const y = (v: number) => H - ((v - lo) / (hi - lo)) * H
+  const line = (vs: (number | null)[]) => vs.map((v, i) => v === null ? null : `${(i / Math.max(1, vs.length - 1)) * W},${y(v).toFixed(1)}`).filter(Boolean).join(' ')
+  return <div className="terrain-profile" title="Ground elevation along the route (Lantmäteriet Markhöjd)">
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" width="100%" height={H}>
+      <polygon points={`0,${H} ${line(ground)} ${W},${H}`} className="ground" />
+      {alt && <polyline points={line(alt)} className="alt" />}
+    </svg>
+    <small className="quiet">terrain {t.minM ?? '?'}–{t.maxM ?? '?'} m{t.climbM != null && ` · climb ${t.climbM} m`}{t.minClearanceM != null && ` · min clearance ${t.minClearanceM} m`}</small>
+  </div>
+}
+
 const store_setOption = (id: string) => store.set(s => ({ route: s.route ? { ...s.route, option: id } : null }))
 
 // ---- subjects ---------------------------------------------------------------------------------------------------

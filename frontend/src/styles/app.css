@@ -343,3 +343,7 @@ b.good { color: var(--good); }
   .search.open { width: 260px; }
   .kpis { display: none; }
 }
+.terrain-profile { margin: 6px 0 2px; }
+.terrain-profile svg { display: block; border-radius: 6px; background: rgba(255, 255, 255, 0.03); }
+.terrain-profile .ground { fill: rgba(150, 132, 96, 0.55); stroke: #b39c6b; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.terrain-profile .alt { fill: none; stroke: #4ea1ff; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
