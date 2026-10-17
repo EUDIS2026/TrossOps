@@ -56,7 +56,8 @@ def test_police_event_inputs_validate_and_reach_the_engine(client):
     took down every snapshot while a matching polisen.se event was cached)."""
     from datetime import datetime, timezone
 
-    from app import feed_inputs, feeds
+    from app import feed_inputs
+    feeds = feed_inputs.feeds  # the module feed_inputs reads (the client fixture may have reloaded app.feeds)
     now = datetime.now(timezone.utc).isoformat()
     feeds.POLISEN._data = {"items": [{"id": 9001, "datetime": now, "name": "Drönare observerad, Luleå", "summary": "Drönare över flygplatsen.",
                                       "keywords": ["drone"], "lng": 22.12, "lat": 65.58, "precision": "municipality"}]}
