@@ -16,6 +16,7 @@ Also keeps a per-process position trail per aircraft and derives GNSS-integrity 
 """
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -118,6 +119,14 @@ def normalise_opensky(sv: list, now_s: float) -> dict | None:
         "nic": None, "nacp": None, "seenS": None if t_pos is None else round(max(0.0, now_s - t_pos), 1),
         "positionType": {0: "adsb", 1: "asterix", 2: "mlat", 3: "flarm"}.get(sv[16]), "source": "opensky",
     }
+
+
+def _in_circle(ac: dict, circle: tuple[float, float, int]) -> bool:
+    if ac.get("lat") is None or ac.get("lng") is None:
+        return False
+    dlat = math.radians(ac["lat"] - circle[0])
+    dlng = math.radians(ac["lng"] - circle[1]) * math.cos(math.radians((ac["lat"] + circle[0]) / 2))
+    return 6_371_000 * math.hypot(dlat, dlng) <= circle[2] * 1852
 
 
 def is_gnss_sample(ac: dict) -> bool:
@@ -228,6 +237,7 @@ class AdsbFeed(Feed):
         if now < self._cooldown_until:
             partial.append(f"adsb.lol rate limit: paused for {self._cooldown_until - now:.0f} s")
         source = "adsb.lol"
+        gap_note = None
         if not live:
             try:
                 if self._opensky_cache is None or now - self._opensky_cache[0] >= OPENSKY_MIN_GAP_S:
@@ -237,6 +247,22 @@ class AdsbFeed(Feed):
                 partial.append("adsb.lol unavailable; serving OpenSky fallback")
             except Exception as exc:  # noqa: BLE001
                 raise FeedError("; ".join(partial + [f"opensky: {describe(exc)}"])) from exc
+        elif len(live) < len(CIRCLES) and os.environ.get("OPENSKY_CLIENT_ID") and os.environ.get("OPENSKY_CLIENT_SECRET"):
+            # keyed OpenSky fills only the circles adsb.lol could not serve (shared serverless IPs get rate-limited)
+            gaps = [CIRCLES[i] for i in range(len(CIRCLES)) if i not in live]
+            try:
+                if self._opensky_cache is None or now - self._opensky_cache[0] >= OPENSKY_MIN_GAP_S:
+                    self._opensky_cache = (time.time(), self._opensky(client))
+                filled = 0
+                for a in self._opensky_cache[1]:
+                    if a["id"] not in merged and any(_in_circle(a, c) for c in gaps):
+                        merged[a["id"]] = (now - (a["seenS"] or 0.0), a)
+                        filled += 1
+                source = "adsb.lol+opensky"
+                partial = [p for p in partial if not p.startswith("adsb.lol")]  # gaps and cooldown covered
+                gap_note = f"{len(gaps)} adsb.lol circle(s) filled by OpenSky ({filled} aircraft)"
+            except Exception as exc:  # noqa: BLE001
+                partial.append(f"opensky gap fill: {describe(exc)}")
         items = []
         for pos_t, ac in merged.values():
             items.append({**ac, "seenS": round(max(0.0, now - pos_t), 1)})
@@ -245,6 +271,8 @@ class AdsbFeed(Feed):
                 "coverage": [{"lat": c[0], "lng": c[1], "radiusNm": c[2],
                               "fetchedAt": iso(self._snapshots[i][0]) if i in self._snapshots else None,
                               "error": self._circle_errors.get(i)} for i, c in enumerate(CIRCLES)]}
+        if gap_note:
+            data["gapFill"] = gap_note
         if partial:
             data["_partial"] = partial
         return data

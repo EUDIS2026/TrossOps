@@ -207,6 +207,30 @@ def test_adsb_falls_back_to_opensky():
     assert items["478899"]["onGround"] is True and items["478899"]["altM"] == 0.0
 
 
+def test_adsb_keyed_opensky_fills_only_rate_limited_circles(monkeypatch):
+    monkeypatch.setenv("OPENSKY_CLIENT_ID", "id")
+    monkeypatch.setenv("OPENSKY_CLIENT_SECRET", "secret")
+
+    def lol(request):  # the central circle is rate-limited, the others answer
+        if "/lat/60.5/" in str(request.url):
+            return httpx.Response(420, text="slow down")
+        return httpx.Response(200, json=fixture("adsb_lol.json"))
+
+    feeds.ADSB.transport = mock([("api.adsb.lol", lol), ("auth.opensky-network.org", lambda r: httpx.Response(200, json={"access_token": "t", "expires_in": 1800})),
+                                 ("opensky-network.org/api/states/all", lambda r: httpx.Response(200, json=sky))])
+    sky = fixture("opensky.json")
+    inside = list(sky["states"][3])
+    inside[0], inside[5], inside[6] = "aaaaaa", 18.4, 60.6  # in the rate-limited circle, unknown to adsb.lol
+    sky["states"].append(inside)
+    sky["states"].append(["4acac6"] + list(sky["states"][1][1:]))  # also seen by adsb.lol: adsb.lol wins
+    body = feeds.ADSB.get()
+    items = {a["id"]: a for a in body["items"]}
+    assert body["primary"] == "adsb.lol+opensky" and body["status"] == "working"
+    assert "filled by OpenSky" in body["gapFill"]
+    assert items["aaaaaa"]["source"] == "opensky" and items["4acac6"]["source"] != "opensky"
+    assert "4bb4ee" not in items  # 54.8 N 25.1 E, outside the missing circle
+
+
 def test_adsb_trail_ring_respects_gap(monkeypatch):
     clock = {"t": 1_000_000.0}
     monkeypatch.setattr(adsb.time, "time", lambda: clock["t"])
