@@ -50,7 +50,7 @@ P: dict[str, tuple[float, float]] = {
     "sea_stockholm_e": (19.40, 59.30), "sea_gotland_e": (19.60, 57.60), "sea_gotland_s": (18.30, 56.80), "sea_gotland_ne": (19.40, 58.25),
     "sea_oland_s": (16.60, 55.95), "sea_oland_e": (17.30, 56.80), "sea_bornholm_n": (14.90, 55.60), "sea_hano": (14.60, 55.75), "sea_oresund": (12.70, 55.80),
     "sea_kattegat": (11.50, 57.30), "sea_kattegat_n": (11.20, 57.85), "sea_bothnia_s": (18.80, 61.60), "sea_bothnia_m": (19.90, 62.90),
-    "sea_bothnia_n": (21.80, 64.60), "sea_bothnia_bay": (23.00, 65.30), "sea_landsort": (18.00, 58.60), "sea_aland": (19.30, 60.10),
+    "sea_bothnia_n": (21.80, 64.60), "sea_bothnia_bay": (23.00, 65.30), "sea_landsort": (18.00, 58.60), "sea_aland": (19.12, 60.15),
 }
 
 COUNTY_OF = {
@@ -332,6 +332,84 @@ def at_sea(cache: "RouteCache", p: tuple[float, float], max_m: float = 15_000.0)
     return cache.get(RouteCache.key("sea-point", p, max_m), compute)[0]
 
 
+# Built-up radius around each reference town centre: field units, AD batteries and the like deploy outside it.
+URBAN_KM = {"stockholm": 12.0, "goteborg": 9.0, "malmo": 7.0, "uppsala": 5.0, "linkoping": 4.5, "orebro": 4.5, "vasteras": 4.5, "helsingborg": 4.5,
+            "norrkoping": 4.5, "jonkoping": 4.5, "umea": 4.0, "lulea": 3.5}
+
+
+def urban(p: tuple[float, float], margin_km: float = 0.0) -> str | None:
+    """The reference town whose built-up area contains p (default radius 3 km), else None."""
+    for k, c in P.items():
+        if not k.startswith("sea_") and geo.haversine_m(c, p) < (URBAN_KM.get(k, 3.0) + margin_km) * 1000:
+            return k
+    return None
+
+
+FIELD_CLASSES = {"secondary", "tertiary"}
+
+
+def field_anchor(cache: "RouteCache", center: tuple[float, float], radius_m: float = 3000.0) -> tuple[float, float]:
+    """A road vertex near `center` that a unit in the field could actually reach and hide beside: on a
+    secondary/tertiary road (any class on Gotland), on dry ground, outside the built-up area of a town. The
+    search widens when nothing qualifies; the declared point is the last resort. Cached."""
+    def compute():
+        net, mask = road_net(center), land_mask()
+        if net is None:
+            return [center]
+        classes = None if on_gotland(center) else FIELD_CLASSES
+        for r in (radius_m, radius_m * 2, radius_m * 4):
+            for q in net.nodes_within(center, r, classes):
+                if (mask is None or mask.is_dry(q)) and not urban(q):
+                    return [(round(q[0], 6), round(q[1], 6))]
+        return [center]
+    return cache.get(RouteCache.key("anchor", center, radius_m), compute)[0]
+
+
+def field_positions(cache: "RouteCache", center: tuple[float, float], radius_m: float, seed: int, n: int,
+                    min_sep_m: float = 40.0) -> list[tuple[float, float]]:
+    """`n` dispersed vehicle positions for a unit in the field around `center`: each 30-80 m off a real road
+    (secondary/tertiary; any class on Gotland), on dry ground, not on the road itself, outside towns, and at least
+    `min_sep_m` from each other. The road vertices used are spread out (>= 120 m apart) so a company reads as a
+    dispersed position, not a heap. Cached as one list."""
+    def compute():
+        rng = random.Random(seed)
+        net, mask = road_net(center), land_mask()
+        bases: list[tuple[float, float]] = []
+        if net is not None:
+            classes = None if on_gotland(center) else FIELD_CLASSES
+            for r in (radius_m, radius_m * 1.6, radius_m * 2.5):
+                cand = [q for q in net.nodes_within(center, r, classes) if (mask is None or mask.is_dry(q)) and not urban(q)]
+                rng.shuffle(cand)
+                bases = []
+                for q in cand:
+                    if all(geo.haversine_m(q, b) >= 120.0 for b in bases):
+                        bases.append(q)
+                        if len(bases) >= n:
+                            break
+                if len(bases) >= max(3, n // 2):
+                    break
+        if not bases:
+            bases = [field_anchor(cache, center, radius_m)]
+        blocked = road_cells_near(center) if mask is not None else None
+        out: list[tuple[float, float]] = []
+        for i in range(n):
+            base = bases[i % len(bases)]
+            best = None
+            for _ in range(12):
+                p = geo.destination(base, rng.uniform(0, 360), rng.uniform(30, 80))
+                q = mask.nearest_dry(p, 600.0, blocked=blocked) if mask is not None else p
+                if q is None:
+                    continue
+                if all(geo.haversine_m(q, o) >= min_sep_m for o in out):
+                    best = q
+                    break
+                best = best or q
+            p = best or base
+            out.append((round(p[0], 6), round(p[1], 6)))
+        return out
+    return cache.get(RouteCache.key("field", center, radius_m, seed, n, min_sep_m), compute)
+
+
 def street_loop(cache: RouteCache, city: str, seed: int, start: tuple[float, float], length_m: float) -> list[tuple[float, float]]:
     def compute():
         gn = _geonet()
@@ -552,13 +630,15 @@ class Orbat:
 
     def _air_force(self) -> None:
         self.formation("fm-air", "Air Force", "AF", "SFAPM-------", "service", "fm-sweden", "air", "air")
+        # CAP orbits stay over Swedish territory or the Swedish side of international water: clear of Finland,
+        # the Åland demilitarised zone and the Danish territorial sea around Bornholm.
         wings = [
             ("aw-n", "Air Wing North", "AW N", "airbase-norr", [("sq-n1", "1st Fighter Squadron", 12), ("sq-n2", "2nd Fighter Squadron", 12)],
-             [racetrack(pt("sea_bothnia_bay"), 60, 70_000, 14_000), racetrack(pt("kalix", 0, 60), 150, 60_000, 12_000)]),
+             [racetrack(pt("sea_bothnia_bay", -20, -15), 30, 60_000, 12_000), racetrack(pt("kalix", -30, 60), 150, 60_000, 12_000)]),
             ("aw-s", "Air Wing South", "AW S", "airbase-syd", [("sq-s1", "3rd Fighter Squadron", 12), ("sq-s2", "4th Fighter Squadron", 12)],
-             [racetrack(pt("sea_gotland_s"), 30, 80_000, 15_000), racetrack(pt("sea_bornholm_n"), 80, 60_000, 12_000)]),
+             [racetrack(pt("sea_gotland_s"), 30, 80_000, 15_000), racetrack(pt("sea_bornholm_n", 0, 12), 80, 60_000, 12_000)]),
             ("aw-w", "Air Wing West", "AW W", "airbase-vast", [("sq-w1", "5th Fighter Squadron", 12), ("sq-w2", "6th Fighter Squadron", 12)],
-             [racetrack(pt("sea_kattegat"), 20, 70_000, 13_000), racetrack(pt("sea_aland"), 160, 70_000, 14_000)]),
+             [racetrack(pt("sea_kattegat"), 20, 70_000, 13_000), racetrack((10.95, 58.35), 0, 60_000, 12_000)]),
         ]
         for wid, wlabel, wshort, base, sqs, caps in wings:
             self.formation(f"fm-{wid}", wlabel, wshort, "SFAPMFF---H-", "regiment", "fm-air", "air.fighter", "air", region=self.region_of(self.sites[base]))
@@ -651,7 +731,7 @@ class Orbat:
                     self.add(node)
         # UAV detachment
         self.formation("fm-uav", "UAV Squadron", "UAV", "SFAPMFQ---F-", "battalion", "fm-air", "air.uav", "air")
-        for k, (gar, orbit_c) in enumerate([("garrison-norr", pt("haparanda", -15, 5)), ("garrison-gotland", pt("hemse", 15, 0)), ("garrison-syd", pt("simrishamn", 5, -12)),
+        for k, (gar, orbit_c) in enumerate([("garrison-norr", pt("haparanda", -15, 5)), ("garrison-gotland", pt("hemse", 15, 0)), ("garrison-syd", pt("simrishamn", -8, -3)),
                                             ("garrison-mitt", pt("norrtalje", 15, 0))]):
             c = self.sites[gar]
             loop = [geo.destination(orbit_c, b, 6000) for b in range(0, 361, 20)]
@@ -743,24 +823,12 @@ class Orbat:
         return place
 
     def in_field(self, center: tuple[float, float], facing: float, radius_m: float, seed: int):
-        """Dispersed field positions next to real roads around `center`, vehicles facing the threat axis."""
-        rng = random.Random(seed)
-        nodes: list[tuple[float, float]] = []
-        net = road_net(center)
-        mask = land_mask()
-        if net is not None:
-            cand = list(net.nodes_within(center, radius_m, {"secondary", "tertiary", "minor"} if on_gotland(center) else {"secondary", "tertiary"}))
-            rng.shuffle(cand)
-            nodes = [q for q in cand if mask is None or mask.is_dry(q)][:64]  # not bridge nodes
-
+        """Dispersed field positions next to real roads around `center` (outside towns, spaced apart, never on the
+        road or in water), vehicles facing the threat axis."""
         def place(i: int, total: int) -> MotionSpec:
-            if nodes:
-                base = nodes[i % len(nodes)]
-                p = geo.destination(base, rng.uniform(0, 360), rng.uniform(25, 60))
-            else:
-                p = geo.destination(center, rng.uniform(0, 360), rng.uniform(0.2, 1.0) * radius_m)
-            p = on_ground(self.cache, p, max_m=800.0)
-            return MotionSpec("static", pos=(p[0], p[1], None), heading=(facing + rng.uniform(-25, 25)) % 360)
+            p = field_positions(self.cache, center, radius_m, seed, total)[i]
+            turn = random.Random(seed * 1000 + i).uniform(-25, 25)
+            return MotionSpec("static", pos=(p[0], p[1], None), heading=(facing + turn) % 360)
         return place
 
     def on_road(self, rid: str, a: tuple[float, float], b: tuple[float, float], speed: float, start_s: float, hold_s: float, spacing_m: float = 70.0):
@@ -831,7 +899,7 @@ class Orbat:
         # Ranger battalion (north, winter)
         self.formation("fm-bn-rgr", "Ranger Battalion", "Rgr Bn", "SFGPUCIS---F", "battalion", "fm-bde-n", "land.manoeuvre", "land", region="25")
         for ci, letter in enumerate("abc"):
-            place = self.in_field(pt("gallivare", 30, -20), 30, 6000, 900 + ci) if letter == "a" else self.at_garrison("garrison-fjall")
+            place = self.in_field(pt("gallivare", 30, -20), 30, 2500, 900 + ci) if letter == "a" else self.at_garrison("garrison-fjall")
             self._company(f"fm-coy-r{letter}", f"Ranger Company {letter.upper()}", f"R{letter.upper()}", "SFGPUCIS---E", "fm-bn-rgr", "land.manoeuvre", "25", [("bv", 8)], place)
         # Battlegroup Gotland
         self.formation("fm-bg-g", "Battlegroup Gotland", "BG G", "SFGPUCIZ---G", "regiment", "fm-army", "land.manoeuvre", "land", region="09")
@@ -846,7 +914,8 @@ class Orbat:
 
     def _ad_unit(self, cid: str, label: str, parent: str, region: str | None, center: tuple[float, float], launchers: int, radars: int, plat: str, range_km: float) -> None:
         self.formation(cid, label, label.split(" ")[-1] if "Battery" not in label else label.replace("AD Battery ", "Bty "), "SFGPUCD----E", "company", parent, "land.ad", "land", region=region, caps=["air_defence"])
-        center = on_ground(self.cache, center)
+        # the fire unit deploys beside a road it can reach, outside towns; the radar stands just off that road
+        center = on_ground(self.cache, geo.destination(field_anchor(self.cache, center, 2500.0), stable_seed(cid, "fcr") % 360, 90.0), max_m=1500.0)
         for i, (p, b) in enumerate(sitegen.ad_battery_positions(center, 0, launchers, 1800 if range_km > 50 else 900, stable_seed(cid))):
             p = on_ground(self.cache, p, max_m=1500.0)
             n = self.vehicle(f"{cid[3:]}-l{i + 1}", f"{label} L{i + 1}", "ad_launcher", cid, region, MotionSpec("static", pos=(p[0], p[1], None), heading=b))
@@ -926,24 +995,42 @@ class Orbat:
                 self.add(node)
 
     # -- home guard -------------------------------------------------------------------------------------------------
+    def _guard_posts(self, sid: str) -> list[tuple[float, float]]:
+        """Two guard posts just outside a site's fence on opposite sides (a naval base: its land gate and one flank)."""
+        lay = self.layouts[sid]
+        ring = lay.footprint
+        edges = (3, 0) if lay.kind == "navbase" else (0, 2)
+        posts = []
+        for k in edges:
+            a, b = ring[k], ring[(k + 1) % (len(ring) - 1)]
+            mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+            posts.append(geo.destination(mid, geo.bearing_deg(lay.center, mid), 150.0))
+        return posts
+
     def _home_guard(self) -> None:
         self.formation("fm-hg", "Home Guard", "HG", "SFGPUCI----I", "division", "fm-army", "land.homeguard", "land")
-        protect = {s.id: self.sites[s.id] for s in SITES if s.kind in ("power", "port", "bridge", "telecom", "comms", "radar", "depot")}
+        # A battalion guards objects in its own county (each object by one company): civil infrastructure, sensors,
+        # depots and the bases themselves. The rest of its companies hold area-security positions on the outskirts
+        # of the county seat.
+        kinds = ("power", "port", "bridge", "telecom", "comms", "radar", "depot", "airbase", "navbase", "hq", "hospital")
         for code, county, seat in COUNTY_SEATS:
             bid = f"fm-hg-{code}"
             self.formation(bid, f"Home Guard Battalion {county}", f"HG {county}", "SFGPUCI----F", "battalion", "fm-hg", "land.homeguard", "land", region=code)
-            near = sorted(protect.items(), key=lambda kv: geo.haversine_m(kv[1], P[seat]))[:2]
+            own = [s.id for s in SITES if s.kind in kinds and COUNTY_OF.get(s.near) == code]
+            near = sorted(own, key=lambda sid: (geo.haversine_m(self.sites[sid], P[seat]), sid))[:2]
             for ci in range(3):
                 cid = f"fm-hg-{code}-{ci + 1}"
                 self.formation(cid, f"HG {county} Company {ci + 1}", f"{ci + 1}", "SFGPUCI----E", "company", bid, "land.homeguard", "land", region=code)
-                if ci < len(near) and geo.haversine_m(near[ci][1], P[seat]) < 120_000:
-                    c = geo.destination(near[ci][1], 200 + ci * 60, 450)
-                    task = f"Protect {near[ci][0]}"
+                if ci < len(near):
+                    task = f"Protect {near[ci]}"
+                    posts = self._guard_posts(near[ci])
                 else:
-                    c = pt(seat, (ci - 1) * 4, 2)
                     task = "Area security"
+                    out = geo.destination(P[seat], (stable_seed(code, ci) % 360), (URBAN_KM.get(seat, 3.0) + 1.5) * 1000)
+                    a = field_anchor(self.cache, out, 2500.0)
+                    posts = [geo.destination(a, 60, 90), geo.destination(a, 240, 90)]
                 for t in range(2):
-                    p = on_ground(self.cache, geo.destination(c, t * 140, 120))
+                    p = on_ground(self.cache, posts[t], max_m=1500.0)
                     self.add(Node(f"hg-{code}-{ci + 1}{'ab'[t]}", f"HG {county} {ci + 1}{'AB'[t]}", "personnel", "land", "land.homeguard", "SFGPUCI----D", "own", cid,
                                   None, f"{ci + 1}{'AB'[t]}", "Home Guard platoon", "personnel", None, code, ["guard", "area_security"],
                                   MotionSpec("static", pos=(p[0], p[1], None), heading=t * 140), crew=30, range_km=20, tags=[task]))
