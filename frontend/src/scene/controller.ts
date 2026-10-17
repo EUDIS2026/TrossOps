@@ -17,6 +17,7 @@ import { CinematicCamera } from './camera'
 import { ModelLayer, modelZoomFor, type ModelInstance } from './models3d'
 import { addOverlays, circleRing, DETAIL_LAYERS, empty, nightPolygon, OVERLAY_LAYERS, setData } from './overlays'
 import { SpriteLayer } from './sprites'
+import { WindLayer } from './windfield'
 import { halo, headingArrow, natoSymbol, palette, trafficIcon, vesselColor } from './symbols'
 import { hasTopdown, topdownImage, TOPDOWN_FILL } from './topdown'
 import { MODEL_SPECS, type ModelKey } from './three/models'
@@ -42,6 +43,7 @@ export class SceneController {
   readonly map: MlMap
   readonly sprites = new SpriteLayer('symbols', spriteFactory)
   readonly models = new ModelLayer()
+  readonly wind = new WindLayer()
   readonly camera: CinematicCamera
   private raf = 0
   private styleReady = false
@@ -97,6 +99,7 @@ export class SceneController {
   private install() {
     addOverlays(this.map)
     if (!this.map.getLayer(this.models.id)) this.map.addLayer(this.models)
+    if (!this.map.getLayer(this.wind.id)) this.map.addLayer(this.wind, 'reports')
     if (!this.map.getLayer(this.sprites.id)) this.map.addLayer(this.sprites, 'labels')
     this.prev = {}
     this.onStore()
@@ -151,6 +154,7 @@ export class SceneController {
       }
     }
     this.vis('site-logistics-bund', this.onLayers.has('detail.logistics'))
+    this.wind.enabled = this.onLayers.has('env.wind')
     const an = analysisLayer(s)
     this.vis('analysis-fill', !!an && !s.threeD); this.vis('analysis-3d', !!an && s.threeD)
     if (!an) { setData(this.map, 'analysis', empty()); store.set({ analysisInfo: null }) }
@@ -229,11 +233,16 @@ export class SceneController {
   // ---- environment (real public feeds) ------------------------------------------------------------------------
   private due(key: string, ms: number) { const now = performance.now(); if (now - (this.envAt[key] ?? -1e12) < ms) return false; this.envAt[key] = now; return true }
 
+  /** Real environment and civil feeds; each source is fetched independently so one failure never starves another. */
   private async refreshEnvironment() {
     const on = this.onLayers
     const m = this.map
-    try {
-      if (on.has('civil.police_events') && this.due('police', 300_000)) {
+    const job = async (key: string, ms: number, enabled: boolean, fn: () => Promise<void>) => {
+      if (!enabled || !this.due(key, ms)) return
+      try { await fn() } catch { delete this.envAt[key] } // retry on the next pass; Sources shows the feed status
+    }
+    await Promise.all([
+      job('police', 300_000, on.has('civil.police_events'), async () => {
         const r = await api.police()
         setData(m, 'police', { type: 'FeatureCollection', features: (r.items ?? []).filter(e => e.lng != null).map(e => {
           const kw = (e.keywords as string[] | undefined) ?? []
@@ -241,26 +250,27 @@ export class SceneController {
           return { type: 'Feature', properties: { id: String(e.id), name: e.name, type: e.type, alert: kw.length > 0 },
             geometry: { type: 'Point', coordinates: [(e.lng as number) + 0.06 * Math.cos(jit), (e.lat as number) + 0.03 * Math.sin(jit)] } }
         }) })
-      }
-      if (on.has('env.warnings') && this.due('warnings', 300_000)) {
+      }),
+      job('warnings', 300_000, on.has('env.warnings'), async () => {
         const r = await api.warnings()
         setData(m, 'warnings', { type: 'FeatureCollection', features: (r.items ?? []).filter(w => w.geometry).map(w => ({ type: 'Feature', properties: { id: String(w.id), level: w.level, event: w.event, area: w.areaName }, geometry: w.geometry as GeoJSON.Geometry })) })
-      }
-      if (on.has('env.obs') && this.due('obs', 600_000)) {
+      }),
+      job('obs', 600_000, on.has('env.obs'), async () => {
         const r = await api.observations()
         const st = ((r as unknown as { stations?: Record<string, unknown>[] }).stations ?? r.items ?? []) as Record<string, number | string | null>[]
         setData(m, 'stations', { type: 'FeatureCollection', features: st.filter(x => x.lng != null).map(x => ({ type: 'Feature', properties: { id: String(x.id), name: x.name,
           text: [x.airTempC != null ? `${Math.round(Number(x.airTempC))}°` : '', x.windMps != null ? `${Math.round(Number(x.windMps))} m/s` : '', x.visibilityM != null && Number(x.visibilityM) < 10000 ? `vis ${(Number(x.visibilityM) / 1000).toFixed(1)} km` : ''].filter(Boolean).join(' · ') },
           geometry: { type: 'Point', coordinates: [Number(x.lng), Number(x.lat)] } })) })
-      }
-      if ((on.has('env.wind') || on.has('analysis.weather')) && this.due('grid', 900_000)) {
+      }),
+      job('grid', 900_000, on.has('env.wind') || on.has('analysis.weather'), async () => {
         const r = await api.grid()
         this.grid = (r.points ?? []) as unknown as A.GridPoint[]
+        this.wind.setField(this.grid as never)
         setData(m, 'wind', { type: 'FeatureCollection', features: (r.points ?? []).filter(p => p.windDirDeg != null).map(p => ({ type: 'Feature', properties: { dir: p.windDirDeg, speed: p.windMps }, geometry: { type: 'Point', coordinates: [p.lng as number, p.lat as number] } })) })
         this.analysisKey = ''
-      }
-      if (on.has('env.daylight') && this.due('night', 60_000)) setData(m, 'night', nightPolygon(new Date()))
-    } catch { /* feeds report their own status in Sources */ }
+      }),
+      job('night', 60_000, on.has('env.daylight'), async () => { setData(m, 'night', nightPolygon(new Date())) }),
+    ])
   }
 
   private async ensureRadar() {
@@ -515,7 +525,7 @@ export class SceneController {
     if (key === this.analysisKey) return
     this.analysisKey = key
     if (surface === 'fusion' && !this.contributions.length) void this.refreshContributions()
-    if ((surface === 'weather') && !this.grid.length) { this.envAt.grid = 0; void this.refreshEnvironment() }
+    if (surface === 'weather' && !this.grid.length) { delete this.envAt.grid; void this.refreshEnvironment() }
     const r = surface === 'fusion' ? A.fusion(this.contributions, Math.max(4, Math.min(res, 6))) : surface === 'threat' ? A.threat(w, res) : surface === 'coverage' ? A.coverage(w, Math.min(res, 5))
       : surface === 'response' ? A.response(w, Math.min(res, 4)) : surface === 'weather' ? A.weather(this.grid, Math.min(res, 4)) : A.gnss(s.live.aircraft, res)
     this.lastSurface = r
@@ -525,8 +535,17 @@ export class SceneController {
   lastSurface: A.SurfaceResult | null = null
 
   private trailKey = ''
+  private trailFetched = 0
   private updateTrail(s: AppState, w: WorldModel, t: number) {
     const sel = s.selected
+    if (sel?.kind === 'aircraft') {
+      // real ADS-B history kept by the backend (~30 min)
+      if (performance.now() - this.trailFetched > 10_000 || this.trailKey !== sel.id) {
+        this.trailFetched = performance.now(); this.trailKey = sel.id
+        api.aircraftTrail(sel.id).then(r => { if (store.get().selected?.id === sel.id) setData(this.map, 'trails', { type: 'FeatureCollection', features: r.points.length > 1 ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: r.points.map(q => [q.lng, q.lat]) } }] : [] }) }).catch(() => undefined)
+      }
+      return
+    }
     if (!sel || sel.kind !== 'entity' || !this.onLayers.has('picture.trails')) { if (this.trailKey) { this.trailKey = ''; setData(this.map, 'trails', empty()) } return }
     const n = w.get(sel.id)
     if (!n?.motion) return
