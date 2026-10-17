@@ -25,7 +25,9 @@ from .orbat import CABLES
 from .models import GeoPosition, InputReport
 
 SEVERITY = {"yellow": "advisory", "orange": "warning", "red": "critical"}
-POLICE_KEYWORDS = {"drone", "drönare", "sabotage", "explosion", "skottlossning", "sprängning"}
+# Keys emitted by feeds/polisen.py `keywords()` (English ids; the Swedish words are matched there). Fires ("brand") are
+# left out on purpose: ordinary building fires are frequent and would bury the operational picture.
+POLICE_KEYWORDS = {"drone", "sabotage", "explosion", "shooting", "bomb-threat", "suspicious-object"}
 
 
 def _when(s) -> datetime | None:
@@ -86,7 +88,7 @@ def inputs_for_engine(t: float) -> list[InputReport]:
         # Compare instants, not strings: police times carry +01:00/+02:00 offsets, the cutoff is UTC.
         if not kws & POLICE_KEYWORDS or ev.get("lng") is None or when is None or when < cutoff:
             continue
-        tags = ["police", "real"] + (["drone"] if kws & {"drone", "drönare"} else []) + sorted(kws)
+        tags = ["police", "real"] + sorted(kws)
         out.append(InputReport(id=f"in-x-pol-{ev['id']}", channel="police_event", authorLevel="civil_authority", author="Polisen (real event)", receivedAt=ev.get("datetime") or iso,
                                effectiveAt=ev.get("datetime") or iso, severity="advisory", title=ev.get("name") or "Police event", text=ev.get("summary") or "",
                                position=GeoPosition(longitudeDeg=ev["lng"], latitudeDeg=ev["lat"]), radiusM=25_000 if ev.get("precision") == "municipality" else 60_000,

@@ -59,7 +59,7 @@ def test_police_event_inputs_validate_and_reach_the_engine(client):
     from app import feed_inputs, feeds
     now = datetime.now(timezone.utc).isoformat()
     feeds.POLISEN._data = {"items": [{"id": 9001, "datetime": now, "name": "Drönare observerad, Luleå", "summary": "Drönare över flygplatsen.",
-                                      "keywords": ["drönare"], "lng": 22.12, "lat": 65.58, "precision": "municipality"}]}
+                                      "keywords": ["drone"], "lng": 22.12, "lat": 65.58, "precision": "municipality"}]}
     try:
         ins = feed_inputs.inputs_for_engine(0)
         pol = [i for i in ins if i.channel == "police_event"]

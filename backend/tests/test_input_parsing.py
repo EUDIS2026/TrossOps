@@ -38,6 +38,21 @@ def test_police_events_are_filtered_by_instant_not_by_string(monkeypatch):
     assert "in-x-pol-1" in ids and "in-x-pol-2" not in ids
 
 
+def test_police_feed_keyword_ids_reach_the_engine(monkeypatch):
+    """feeds/polisen.py emits English keyword ids; shootings, bomb threats and suspicious objects used to be dropped
+    because the filter listed Swedish words. Plain fires stay out (too frequent to be operational)."""
+    from app import feed_inputs, feeds as F
+    now = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    kinds = ["shooting", "bomb-threat", "suspicious-object", "drone", "fire"]
+    items = [{"id": 100 + k, "datetime": now, "name": kw, "summary": "", "keywords": [kw], "lng": 18.0, "lat": 59.3, "precision": "municipality"}
+             for k, kw in enumerate(kinds)]
+    monkeypatch.setattr(F.POLISEN, "_data", {"items": items}, raising=False)
+    monkeypatch.setattr(F.ADSB, "gnss", lambda: [])
+    got = {i.id: i for i in feed_inputs.inputs_for_engine(0)}
+    assert {"in-x-pol-100", "in-x-pol-101", "in-x-pol-102", "in-x-pol-103"} <= set(got) and "in-x-pol-104" not in got
+    assert "drone" in got["in-x-pol-103"].tags and "shooting" in got["in-x-pol-100"].tags
+
+
 def test_expired_smhi_warnings_are_dropped(monkeypatch):
     from app import feed_inputs, feeds as F
     now = datetime.now(timezone.utc)
