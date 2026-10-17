@@ -18,7 +18,7 @@ configured and the network up (observed on the owner's machine, 17 October 2026)
 | Road / street / sea routing (OSM-derived, ODbL) | working | `geonet.py`, `test_geonet.py`, smoke E2E-07 |
 | Motion model with TypeScript twin | working | `test_motion.py` + `motion.test.ts` (shared fixture) |
 | Site layouts (airbase, naval base, garrison, depot, radar) | simulated | `sitegen.py`, smoke E2E-08 |
-| Rule engine (18 rules, R01–R19) | working | `rules.py`, `test_rules.py`, `test_scenario.py` |
+| Rule engine (19 rules, R01–R20) | working | `rules.py`, `test_rules.py`, `test_scenario.py` |
 | Source fusion (Admiralty grading) | working | `fusion.py`, smoke E2E-10 |
 | Deception indicators | working (declared weights) | `deception.py`, smoke E2E-10 |
 | Multi-hypothesis prediction | working (declared models) | `predict.py`, smoke E2E-10 |

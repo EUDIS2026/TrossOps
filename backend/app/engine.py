@@ -236,12 +236,36 @@ class Engine:
         scripted = inputs_mod.scripted_reports(self.epoch, t)
         cutoff = self.iso_at(t)
         posted = [p for p in self.posted if p.receivedAt <= cutoff or self.speed != 1.0]
-        external = self.external_inputs(t) if t >= self.now_s() - 30 else []  # real feeds only describe the present
+        external: list[InputReport] = []
+        if t >= self.now_s() - 30:  # real feeds only describe the present
+            try:
+                external = self.external_inputs(t)
+            except Exception:  # noqa: BLE001  a malformed public feed item must never take the operational picture down
+                external = []
         injected = [p for p in self.injected if p.effectiveAt <= cutoff]
         allr = scripted + posted + injected + external
         for r in allr:
             r.acknowledged = r.id in self.acks
         return sorted(allr, key=lambda r: r.effectiveAt)
+
+    HISTORY_DT_S = 60.0
+
+    def track_history(self, entities: dict[str, SceneEntity], t: float) -> dict[str, dict]:
+        """What the sensors held on each unknown track HISTORY_DT_S ago (position, heading, speed) — the track history the
+        prediction uses to estimate an observed turn rate. Only for tracks that already existed then."""
+        out: dict[str, dict] = {}
+        dt = self.HISTORY_DT_S
+        if t - dt < 0:
+            return out
+        for eid, e in entities.items():
+            ent = self.world.entities.get(eid)
+            if e.affiliation != "unknown" or ent is None:
+                continue
+            st = self.world.state_at(ent, t - dt)
+            if not st.speed:
+                continue  # not yet moving (or not yet held) then: no usable history
+            out[eid] = {"dtS": dt, "lng": st.lng, "lat": st.lat, "headingDeg": st.heading, "speedMps": st.speed}
+        return out
 
     def evaluate(self, t: float) -> Evaluation:
         t = math.ceil(t / EVAL_STEP_S - 1e-9) * EVAL_STEP_S  # up, so a report posted a moment ago is always inside "now"
@@ -252,7 +276,8 @@ class Engine:
             entities = self.entities_at(t)
             inputs = self.inputs_at(t)
             ctx = rules.Context(t=t, now_iso=self.iso_at(t), revision=self.revision, entities=entities, inputs=inputs, areas=self.world.areas,
-                                committed=self.commits, acknowledged=self.acks, cables=self.world.cables, sites=self.world.sites)
+                                committed=self.commits, acknowledged=self.acks, cables=self.world.cables, sites=self.world.sites,
+                                history=self.track_history(entities, t))
             fx = rules.evaluate(ctx)
             for eid, st in fx.entity_status.items():
                 e = entities.get(eid)

@@ -10,7 +10,7 @@
                   world.py (evaluate any t)                                         │
                          │      scripted inputs · operator reports · injections · feed_inputs.py
                          ▼                                  │
-              rules.py (18 rules) ─► fusion.py · deception.py · predict.py · optimize.py
+              rules.py (19 rules) ─► fusion.py · deception.py · predict.py · optimize.py
                          │
         engine.py: catalog (motion, routes, sites) · snapshot (status, alerts, interventions, predictions,
                    fusion, deception) · observed tracks · planner.py (roads / water / air, + terrain)
@@ -64,12 +64,13 @@ all of this (nothing on water, no sites on roads, ships at sea, no router leg ac
 ## Terrain (Lantmäteriet Markhöjd Direkt)
 
 `feeds/markhojd.py` queries ground elevation (RH 2000) from the national elevation model, converting WGS84 to
-SWEREF 99 TM and batching vertices; results are LRU-cached in process. It serves three things, all only when
+SWEREF 99 TM and batching vertices; results are LRU-cached in process. It serves four things, all only when
 credentials are set (otherwise the feed is `adapter-only` and the endpoints return 503; nothing is invented):
 
 - `planner.annotate_terrain`: ground profile and total climb for land and sea options; minimum terrain clearance for
   air options, with a risk penalty and a note below 150 m.
 - `GET /api/terrain/elevation?at=lng,lat`: one point.
+- `GET /api/terrain/profile?path=…`: ground sampled along a polyline (the measure tool).
 - `GET /api/terrain/los?a&b&ha&hb`: bare-earth line of sight with earth curvature and refraction (no trees or
   buildings), returning the obstruction point and the clearance profile.
 

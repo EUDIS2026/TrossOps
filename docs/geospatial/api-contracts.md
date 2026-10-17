@@ -22,7 +22,7 @@ Scene reads carry `worldRevision` and accept `at` (scenario seconds) for replay 
 | `GET /api/scene/predictions?at` | trajectory hypotheses with probabilities and uncertainty rings | `PredictedPath[]` |
 | `GET /api/entities/{entity_id}?at` | inspector detail: entity or formation, related inputs, alerts, interventions, predictions, plan, fusion, deception, rule trace | `EntityDetail \| FormationDetail`; 404 |
 | `GET /api/inputs?at&channel` | reports from every channel (scripted, posted, injected and real-feed derived) | `InputReport[]` |
-| `POST /api/inputs` | submit a report; rules extract severity, entity ids, places, tags; bumps the revision | body `InputIn`; feed-only channels (`police_event`, `crisis_info`) are rejected with 422 |
+| `POST /api/inputs` | submit a report; rules extract severity, entity ids, places, tags; bumps the revision | body `InputIn`; channels include the feed channels `police_event` and `crisis_info` |
 | `GET /api/alerts?at` · `POST /api/alerts/{alert_id}/ack` | alerts / acknowledge (persisted) | `Alert` |
 | `GET /api/interventions?at` | proposals with options, outcome bands, progress | `Intervention` |
 | `POST /api/interventions/{intervention_id}/commit` | commit an option, body `{optionId, expectedRevision}` | 409 stale revision, 404 unknown |
@@ -61,6 +61,7 @@ Every payload carries the feed contract from `backend/app/feeds/base.py`: `id`, 
 | Method and path | Response | Errors |
 |---|---|---|
 | `GET /api/terrain/elevation?at=lng,lat` | `TerrainElevation` `{lng, lat, groundM, datum: "RH 2000", source}` | 422 malformed or outside Sweden; 503 not configured; 502 upstream |
+| `GET /api/terrain/profile?path=lng,lat;lng,lat;…&samples` | `TerrainProfile`: ground sampled evenly along a 2–100 vertex polyline (2–1000 samples; measure tool) | same |
 | `GET /api/terrain/los?a=lng,lat&b=lng,lat&ha&hb` | `LineOfSight`: `visible`, `minClearanceM`, `obstruction`, sampled `profile` with clearance; bare earth (no trees or buildings), earth curvature with refraction | same; `ha`/`hb` 0–20 000 m above ground |
 
 503 means credentials are absent (`LANTMATERIET_USERNAME`/`PASSWORD`, or `CLIENT_ID`/`CLIENT_SECRET`, or `TOKEN`) or feeds are disabled: the API never invents elevation.

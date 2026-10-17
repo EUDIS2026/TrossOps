@@ -3,7 +3,9 @@ the outputs (attention, alerts, interventions, predictions, derived statuses) ca
 they were derived from, so any pixel on the map can be traced back. No learned model is involved."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from . import geo, predict
@@ -27,6 +29,8 @@ class Context:
     acknowledged: set[str]
     cables: list[dict] = field(default_factory=list)
     sites: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Sensor track history for unknown tracks: id -> {"dtS", "lng", "lat", "headingDeg", "speedMps"} observed dtS seconds ago.
+    history: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -42,10 +46,15 @@ class Effects:
     stale_ids: set[str] = field(default_factory=set)
     deception: dict[str, dict] = field(default_factory=dict)  # subject id -> assessment (deception.py)
     fusion: dict[str, dict] = field(default_factory=dict)  # subject id -> source fusion (fusion.py)
+    priority_basis: dict[str, dict[str, tuple[float, str, str]]] = field(default_factory=dict)  # areaId -> source key -> (mult, inputId, title)
 
 
 Rule = Callable[[Context, Effects], None]
 RULES: list[tuple[str, str, Rule]] = []
+# Rules that read other rules' output run after all the rest (and after interventions settle), in catalogue order:
+# R10 needs every priority multiplier (R08 intelligence and R11 directives) and every derived condition; R13 needs every
+# intervention, whichever rule raised it.
+POST_RULES = {"R10", "R13"}
 
 
 def rule(rule_id: str, title: str):
@@ -53,6 +62,46 @@ def rule(rule_id: str, title: str):
         RULES.append((rule_id, title, fn))
         return fn
     return wrap
+
+
+def parse_iso(s: str | None) -> datetime | None:
+    """Timezone-aware datetime from an ISO string (with 'Z' or an offset); None when unparsable."""
+    if not s:
+        return None
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00").replace(" ", "T", 1))
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def is_active(ctx: Context, i: InputReport) -> bool:
+    """True when the report is in force at scenario time (effectiveAt not in the future, e.g. a forecast warning)."""
+    eff, now = parse_iso(i.effectiveAt), parse_iso(ctx.now_iso)
+    return eff is None or now is None or eff <= now + timedelta(seconds=1)
+
+
+def penalise(fx: Effects, eid: str, cause: str, delta: float, note: str) -> None:
+    """Readiness penalty that does not stack within one cause: two overlapping weather warnings or two reports of the
+    same outage cost the same as one (the worst counts). Different causes add up."""
+    st = fx.entity_status.setdefault(eid, {"notes": []})
+    pens = st.setdefault("penalties", {})
+    pens[cause] = min(pens.get(cause, 0.0), delta)
+    st["readinessDelta"] = round(sum(pens.values()), 3)
+    if note not in st["notes"]:
+        st["notes"].append(note)
+
+
+def raise_priority(fx: Effects, area_id: str, mult: float, source: str, i: InputReport) -> None:
+    """Area priority multiplier: the strongest input per source kind counts, kinds multiply. A re-issued directive or a
+    second intelligence report on the same area does not compound."""
+    basis = fx.priority_basis.setdefault(area_id, {})
+    if source not in basis or mult > basis[source][0]:
+        basis[source] = (mult, i.id, i.title)
+    total = 1.0
+    for m, _iid, _title in basis.values():
+        total *= m
+    fx.priorities[area_id] = round(total, 3)
 
 
 # ---- helpers -----------------------------------------------------------------------------------
@@ -72,25 +121,44 @@ def speed_of(e: SceneEntity) -> float:
     return MODEL_CRUISE_MPS.get(e.modelKey or "", CRUISE_MPS.get(e.kind, 10.0))
 
 
+def weather_cover(ctx: Context, at: tuple[float, float] | None) -> tuple[float, InputReport | None]:
+    """(0..0.45 penalty, the advisory responsible) for air/small-craft operations at a point. Only advisories in force
+    count: a warning valid from later today is a forecast, not a penalty now."""
+    if at is None:
+        return 0.0, None
+    pen, worst = 0.0, None
+    for i in ctx.inputs:
+        if i.channel == "weather_advisory" and i.position and i.radiusM and is_active(ctx, i):
+            if geo.haversine_m(at, (i.position.longitudeDeg, i.position.latitudeDeg)) <= i.radiusM:
+                p = 0.15 + 0.1 * SEVERITY_RANK[i.severity]
+                if p > pen:
+                    pen, worst = p, i
+    return min(0.45, pen), worst
+
+
 def weather_penalty(ctx: Context, at: tuple[float, float] | None) -> float:
     """0..0.45 penalty for air/small-craft operations from active weather advisories covering the point."""
-    if at is None:
-        return 0.0
-    pen = 0.0
-    for i in ctx.inputs:
-        if i.channel == "weather_advisory" and i.position and i.radiusM:
-            if geo.haversine_m(at, (i.position.longitudeDeg, i.position.latitudeDeg)) <= i.radiusM:
-                pen = max(pen, 0.15 + 0.1 * SEVERITY_RANK[i.severity])
-    return min(0.45, pen)
+    return weather_cover(ctx, at)[0]
 
 
 MAX_TASKING_KM = {"fixed_wing": 600, "helicopter": 250, "multirotor": 12, "vessel": 250, "ground_vehicle": 300, "personnel": 15, "facility": 300, "infrastructure": 0, "unknown": 0, "formation": 0}
+TASKING_FUEL_FLOOR = {"air": 15.0}  # below this fuel % a platform is not offered for new tasking (default 10 %)
+
+
+def taskable(e: SceneEntity) -> bool:
+    """A unit that cannot receive orders (comms lost) or would run dry on the way is not a real option."""
+    r = e.readiness
+    if r is None:
+        return True
+    if r.commsStatus == "lost":
+        return False
+    return r.fuelPct is None or r.fuelPct >= TASKING_FUEL_FLOOR.get(e.domain, 10.0)
 
 
 def candidates(ctx: Context, caps: list[str], target: tuple[float, float], domains: list[str] | None = None, limit: int = 3, exclude: set[str] = frozenset()) -> list[tuple[SceneEntity, float]]:
     out = []
     for e in ctx.entities.values():
-        if e.affiliation not in ("own", "allied", "civil") or e.id in exclude or e.condition == "unavailable":
+        if e.affiliation not in ("own", "allied", "civil") or e.id in exclude or e.condition == "unavailable" or not taskable(e):
             continue
         if domains and e.domain not in domains:
             continue
@@ -107,11 +175,16 @@ def candidates(ctx: Context, caps: list[str], target: tuple[float, float], domai
 
 
 def make_option(ctx: Context, idx: int, e: SceneEntity, dist_m: float, target: tuple[float, float], title: str, steps: list[str], rule_ids: list[str],
-                deadline_min: float | None, base_success: float, risk: str, cost: dict[str, float]) -> InterventionOption:
+                deadline_min: float | None, base_success: float, risk: str, cost: dict[str, float], eta_override_min: float | None = None,
+                eta_basis: str | None = None) -> InterventionOption:
+    """One tasking option. `eta_override_min` (e.g. an intercept time on a moving track) replaces the straight-line
+    transit time *before* success and outcome bands are computed, so all three agree."""
     spd = speed_of(e)
-    eta_min = dist_m / spd / 60 if spd > 0 else None
+    eta_min = eta_override_min if eta_override_min is not None else (dist_m / spd / 60 if spd > 0 else None)
     r = e.readiness.score if e.readiness else 0.6
-    wp = weather_penalty(ctx, target) if e.domain == "air" or e.modelKey in ("patrol_boat",) else weather_penalty(ctx, target) * 0.3
+    wp_full, wx = weather_cover(ctx, target)
+    exposed = e.domain == "air" or e.modelKey in ("patrol_boat",)
+    wp = wp_full if exposed else wp_full * 0.3
     late = 0.0 if not deadline_min or eta_min is None else max(0.0, (eta_min - deadline_min) / max(deadline_min, 1)) * 0.5
     success = round(max(0.05, min(0.97, base_success + 0.35 * (r - 0.6) - wp - late)), 2)
     eta = eta_min or 0
@@ -120,28 +193,62 @@ def make_option(ctx: Context, idx: int, e: SceneEntity, dist_m: float, target: t
         OutcomeBand(label="expected", probability=round(success * 0.55, 2), timeToEffectMin=round(eta * 1.15, 1), description="Effect achieved on schedule with planned resources."),
         OutcomeBand(label="worst", probability=round(1 - success, 2), timeToEffectMin=round(eta * 1.6, 1), description="Effect delayed or not achieved; fallback option required."),
     ]
-    return InterventionOption(id=f"opt-{idx}", title=f"{title}: {e.label}", rationale=f"{e.label} ({e.kind.replace('_', ' ')}, readiness {r:.2f}) is {dist_m / 1000:.0f} km away at {spd:.0f} m/s; weather penalty {wp:.2f}.",
+    why = [f"{e.label} ({e.kind.replace('_', ' ')}, readiness {r:.2f}) is {dist_m / 1000:.0f} km away (straight line) at {spd:.0f} m/s"]
+    if eta_basis:
+        why.append(eta_basis)
+    why.append(f"success = {base_success:.2f} base + 0.35 × (readiness − 0.6) = {0.35 * (r - 0.6):+.2f}")
+    if wx is not None and wp > 0:
+        why.append(f"− weather {wp:.2f} ({wx.title}, {wx.id}{'' if exposed else '; ×0.3 for a weather-tolerant platform'})")
+    else:
+        why.append("no weather advisory in force over the objective")
+    if late > 0:
+        why.append(f"− late {late:.2f} (ETA {eta:.0f} min against a {deadline_min:.0f} min deadline)")
+    return InterventionOption(id=f"opt-{e.id}", title=f"{title}: {e.label}", rationale="; ".join(why) + f" → {success:.2f}.",
                               steps=steps, assignedEntityIds=[e.id], etaMin=round(eta_min, 1) if eta_min is not None else None, successLikelihood=success,
                               riskLevel=risk, resourceCost=cost, outcomes=outcomes, ruleIds=rule_ids, distanceKm=round(dist_m / 1000, 1))  # type: ignore[arg-type]
 
 
 def intervention(ctx: Context, fx: Effects, iv_id: str, alert: Alert, objective: str, target: tuple[float, float] | None, options: list[InterventionOption]) -> None:
+    """Register an intervention. Option ids name the assigned unit (stable while candidates re-rank as units move, so a
+    committed option keeps pointing at the unit the operator chose). Recommendation and committed progress are
+    settled once every rule has run (`settle_interventions`), so options added later (allied offers) count too."""
     if not options:
         return
-    ranked = sorted(options, key=lambda o: (-o.successLikelihood, o.etaMin or 0))
-    committed = ctx.committed.get(iv_id)
+    seen: dict[str, int] = {}
+    for o in options:
+        n = seen.get(o.id, 0)
+        seen[o.id] = n + 1
+        if n:
+            o.id = f"{o.id}-{n + 1}"
     iv = Intervention(id=iv_id, alertId=alert.id, title=alert.title, objective=objective, position=list(target) if target else None, options=options,
-                      recommendedOptionId=ranked[0].id)
-    if committed:
-        opt = next((o for o in options if o.id == committed["optionId"]), None)
-        iv.committedOptionId = committed["optionId"]
+                      recommendedOptionId=options[0].id)
+    alert.recommendedInterventionId = iv_id
+    fx.interventions.append(iv)
+
+
+def settle_interventions(ctx: Context, fx: Effects) -> None:
+    """De-duplicate interventions raised more than once (several reports on one subject: the newest wins), rank the
+    options, and derive committed status and progress from the committed option's ETA."""
+    latest: dict[str, Intervention] = {}
+    for iv in fx.interventions:
+        latest[iv.id] = iv
+    fx.interventions = list(latest.values())
+    for iv in fx.interventions:
+        ranked = sorted(iv.options, key=lambda o: (-o.successLikelihood, o.etaMin or 0, o.id))
+        iv.recommendedOptionId = ranked[0].id
+        committed = ctx.committed.get(iv.id)
+        if not committed:
+            continue
+        opt = next((o for o in iv.options if o.id == committed["optionId"]), None)
+        legacy = re.fullmatch(r"opt-(\d+)", committed["optionId"])
+        if opt is None and legacy and 0 < int(legacy.group(1)) <= len(iv.options):
+            opt = iv.options[int(legacy.group(1)) - 1]  # commits recorded before option ids named the unit
+        iv.committedOptionId = opt.id if opt else committed["optionId"]
         iv.committedAt = committed["committedAt"]
         eta_s = (opt.etaMin or 1) * 60 if opt else 600
         progress = min(1.0, (ctx.t - committed["committedAtS"]) / max(eta_s, 1))
         iv.progress = round(progress, 3)
         iv.status = "completed" if progress >= 1 else "in_progress"
-    alert.recommendedInterventionId = iv_id
-    fx.interventions.append(iv)
 
 
 def alert(fx: Effects, ctx: Context, alert_id: str, severity: str, title: str, detail: str, rule_id: str, inputs: list[str], entities: list[str], layers: list[str], at: tuple[float, float] | None) -> Alert:
@@ -160,6 +267,10 @@ def layer_for(e: SceneEntity) -> str:
 
 
 # ---- rules -------------------------------------------------------------------------------------
+THREAT_RADIUS_M = 60_000  # an own site within this distance of a predicted path is "threatened"
+CRITICAL_APPROACH_M = 25_000  # closest approach below this makes R01 critical
+
+
 @rule("R01", "Unknown track approach and intercept planning")
 def r01(ctx: Context, fx: Effects) -> None:
     own_targets = [e for e in ctx.entities.values() if e.affiliation == "own" and e.kind in ("facility", "infrastructure")]
@@ -171,7 +282,7 @@ def r01(ctx: Context, fx: Effects) -> None:
         if not p:
             continue
         downgraded = any("downgrade" in i.tags for i in inputs_for(ctx, e.id, "intel_report"))
-        detections = inputs_for(ctx, e.id, "sensor_detection")
+        referencing = inputs_for(ctx, e.id)
         threatened: list[tuple[SceneEntity, float, float]] = []
         if path:
             for tgt in own_targets:
@@ -179,14 +290,14 @@ def r01(ctx: Context, fx: Effects) -> None:
                 if not tp:
                     continue
                 d, dt = predict.closest_approach(path, tp)
-                if d < 60_000:
+                if d < THREAT_RADIUS_M:
                     threatened.append((tgt, d, dt))
             threatened.sort(key=lambda x: x[1])
             path.threatenedEntityIds = [t[0].id for t in threatened[:5]]
             path.etaS = threatened[0][2] if threatened else None
             fx.predictions.append(path)
-            fx.predictions.extend(predict.alternatives(e, path, [(t, pos(t)) for t in own_targets if pos(t)], ctx.t))
-        sev = "advisory" if downgraded else ("critical" if threatened and threatened[0][1] < 25_000 else "warning")
+            fx.predictions.extend(predict.alternatives(e, path, [(t, pos(t)) for t in own_targets if pos(t)], ctx.t, history=ctx.history.get(e.id)))
+        sev = "advisory" if downgraded else ("critical" if threatened and threatened[0][1] < CRITICAL_APPROACH_M else "warning")
         weight = SEVERITY_WEIGHT[sev] * (1.6 if e.domain == "air" else 1.2)
         fx.attention.append(Contribution(p[0], p[1], 45_000 if e.domain == "air" else 25_000, weight, f"Unknown track {e.label}", e.id, "R01"))
         if path:
@@ -195,26 +306,38 @@ def r01(ctx: Context, fx: Effects) -> None:
         for tgt, d, dt in threatened[:2]:
             tp = pos(tgt)
             fx.attention.append(Contribution(tp[0], tp[1], 15_000, weight * 0.8, f"{tgt.label} on predicted path of {e.label}", tgt.id, "R01"))
-        detail = (f"{e.label} at {e.kinematics.speedMps:.0f} m/s heading {e.kinematics.headingDeg:.0f}°. " if e.kinematics else "") + \
-                 (f"Closest approach {threatened[0][1] / 1000:.0f} km to {threatened[0][0].label} in {threatened[0][2] / 60:.0f} min. " if threatened else "No own asset on the 30 min predicted path. ") + \
-                 ("J2 assesses the track as civil transport; posture unchanged." if downgraded else "Identity unresolved.")
+        kin = (f"{e.label} at {e.kinematics.speedMps:.0f} m/s heading {e.kinematics.headingDeg:.0f}°. " if e.kinematics else "")
+        if threatened:
+            tgt0, d0, dt0 = threatened[0]
+            approach = f"Constant-velocity path passes {d0 / 1000:.0f} km from {tgt0.label} in {dt0 / 60:.0f} min"
+            approach += (f" (< {CRITICAL_APPROACH_M / 1000:.0f} km: critical). " if d0 < CRITICAL_APPROACH_M else f" (inside {THREAT_RADIUS_M / 1000:.0f} km, outside {CRITICAL_APPROACH_M / 1000:.0f} km: warning). ")
+            if len(threatened) > 1:
+                approach += f"{len(threatened) - 1} more own site(s) within {THREAT_RADIUS_M / 1000:.0f} km of the path. "
+        else:
+            approach = f"No own site within {THREAT_RADIUS_M / 1000:.0f} km of the 30 min constant-velocity path. "
+        down = next((i for i in referencing if i.channel == "intel_report" and "downgrade" in i.tags), None)
+        detail = kin + approach + (f"J2 assesses the track as civil ({down.id}: {down.title}); posture unchanged, monitoring only." if down else "Identity unresolved.")
         a = alert(fx, ctx, f"al-R01-{e.id}", sev, f"{e.label}: {'monitor' if downgraded else 'identify and shadow'}", detail, "R01",
-                  [i.id for i in detections] + [i.id for i in inputs_for(ctx, e.id, "intel_report")], [e.id] + [t[0].id for t in threatened[:3]], ["track.unknown", "picture.predictions"], p)
-        fx.traces.append({"rule": "R01", "subject": e.id, "severity": sev, "threatened": [t[0].id for t in threatened[:3]], "downgraded": downgraded})
+                  [i.id for i in referencing], [e.id] + [t[0].id for t in threatened[:3]], ["track.unknown", "picture.predictions"], p)
+        fx.traces.append({"rule": "R01", "subject": e.id, "severity": sev, "threatened": [t[0].id for t in threatened[:3]], "downgraded": downgraded,
+                          "closestApproachM": round(threatened[0][1]) if threatened else None, "thresholdsM": [CRITICAL_APPROACH_M, THREAT_RADIUS_M]})
         if downgraded:
             continue
-        caps = ["air_patrol", "isr"] if e.domain == "air" else ["patrol", "surface", "sea_picture", "isr"]
-        domains = ["air"] if e.domain == "air" else ["sea", "air"]
+        if e.domain == "air":
+            caps, domains = ["air_patrol", "isr"], ["air"]
+        elif e.domain == "land":
+            caps, domains = ["patrol", "law_enforcement", "guard", "isr"], ["land", "air"]
+        else:
+            caps, domains = ["patrol", "surface", "sea_picture", "isr"], ["sea", "air"]
         opts = []
         for idx, (c, dist) in enumerate(candidates(ctx, caps, p, domains, limit=4), 1):
             steps = [f"Vector {c.label} toward predicted track of {e.label}", "Establish visual or electronic identification", "Report identity to joint picture", "Shadow until track leaves sector or is identified"]
+            it = predict.intercept_time_s(pos(c), speed_of(c), path) if path else None  # type: ignore[arg-type]
+            basis = (f"earliest intercept on the predicted path at {it[1][0]:.2f}, {it[1][1]:.2f} after {it[0] / 60:.0f} min" if it else
+                     ("no intercept inside the 30 min prediction: ETA is the transit to the track's current position" if path else None))
             o = make_option(ctx, idx, c, dist, p, "Identify with", steps, ["R01"], deadline_min=(threatened[0][2] / 60 if threatened else 30), base_success=0.78 if c.domain == "air" else 0.62,
-                            risk="medium" if sev == "critical" else "low", cost={"flightHours": round(dist / 1000 / 400, 2) if c.domain == "air" else 0, "crewHours": round(dist / speed_of(c) / 3600 * 2, 1)})
-            if path:
-                it = predict.intercept_time_s(pos(c), speed_of(c), path)  # type: ignore[arg-type]
-                if it:
-                    o.etaMin = round(it[0] / 60, 1)
-                    o.rationale += f" Earliest intercept point {it[1][0]:.2f}, {it[1][1]:.2f} after {it[0] / 60:.0f} min."
+                            risk="medium" if sev == "critical" else "low", cost={"flightHours": round(dist / 1000 / 400, 2) if c.domain == "air" else 0, "crewHours": round(dist / speed_of(c) / 3600 * 2, 1)},
+                            eta_override_min=it[0] / 60 if it else None, eta_basis=basis)
             opts.append(o)
         intervention(ctx, fx, f"iv-R01-{e.id}", a, f"Identify {e.label} before it reaches own assets", p, opts)
 
@@ -227,16 +350,25 @@ def r02(ctx: Context, fx: Effects) -> None:
         r = e.readiness
         if e.kind == "formation":
             continue
-        low_fuel = r.fuelPct is not None and r.fuelPct < (12 if e.domain == "air" else 25)
+        air = e.domain == "air"
+        fuel_adv, fuel_warn = (12, 8) if air else (25, 15)
+        low_fuel = r.fuelPct is not None and r.fuelPct < fuel_adv
         low_score = r.score < 0.45
         if not (low_fuel or low_score):
             continue
         p = pos(e)
-        sev = "warning" if (r.fuelPct is not None and r.fuelPct < (8 if e.domain == "air" else 15)) or r.score < 0.3 else "advisory"
+        sev = "warning" if (r.fuelPct is not None and r.fuelPct < fuel_warn) or r.score < 0.3 else "advisory"
         if p:
             fx.attention.append(Contribution(p[0], p[1], 12_000, SEVERITY_WEIGHT[sev] * 0.6, f"Low readiness {e.label}", e.id, "R02"))
+        fired = []
+        if low_fuel:
+            fired.append(f"fuel {r.fuelPct:.0f} % < {fuel_adv} %" + (f" (< {fuel_warn} %: warning)" if r.fuelPct < fuel_warn else "") + (" aircraft threshold" if air else ""))
+        if low_score:
+            fired.append(f"readiness {r.score:.2f} < 0.45" + (" (< 0.30: warning)" if r.score < 0.3 else ""))
+        drivers = [n for n in (r.faults or [])][:2] + ([f"comms {r.commsStatus}"] if r.commsStatus in ("degraded", "lost") else [])
         a = alert(fx, ctx, f"al-R02-{e.id}", sev, f"{e.label}: readiness {r.score:.2f}" + (f", fuel {r.fuelPct:.0f} %" if low_fuel else ""),
-                  "Below the sustainment threshold (fuel < 25 %, aircraft < 12 %, or readiness < 0.45). Resupply, recovery or rotation recommended.", "R02",
+                  "Below the sustainment threshold: " + "; ".join(fired) + "." + (f" Contributing: {', '.join(drivers)}." if drivers else "") +
+                  (" Resupply recommended." if low_fuel and not air else " Recovery to base recommended." if low_fuel else " Recovery or rotation recommended."), "R02",
                   [i.id for i in inputs_for(ctx, e.id, tag="fuel")], [e.id], [layer_for(e)], p)
         if p and low_fuel and e.domain != "air":
             opts = [make_option(ctx, i, c, d, p, "Resupply from", [f"Dispatch fuel from {c.label}", f"Rendezvous with {e.label}", "Confirm fuel state ≥ 70 %"], ["R02"], 240, 0.85, "low", {"fuelM3": 6, "crewHours": 8})
@@ -270,16 +402,25 @@ def r03(ctx: Context, fx: Effects) -> None:
 def r04(ctx: Context, fx: Effects) -> None:
     for e in ctx.entities.values():
         reports = [i for i in ctx.inputs if e.id in i.entityRefs and ("comms" in i.tags or "cyber" in i.tags)]
-        lost = e.readiness is not None and e.readiness.commsStatus in ("degraded", "lost")
+        status = e.readiness.commsStatus if e.readiness else None
+        lost = status in ("degraded", "lost")
         if not reports and not lost:
             continue
         p = pos(e)
-        sev = "critical" if (e.readiness and e.readiness.commsStatus == "lost") else "warning"
+        # Severity: the worse of the reported comms state (lost → critical, degraded → warning) and the reports' own severity (≥ warning).
+        sev = "critical" if status == "lost" else "warning"
+        for i in reports:
+            if SEVERITY_RANK[i.severity] > SEVERITY_RANK[sev]:
+                sev = i.severity
         if "comms_hub" in e.capabilities:
             fx.entity_status.setdefault(e.id, {"notes": []})["condition"] = "degraded"
+        word = "lost" if status == "lost" else "degraded"
         if p:
-            fx.attention.append(Contribution(p[0], p[1], 30_000 if "comms_hub" in e.capabilities else 8_000, SEVERITY_WEIGHT[sev], f"Communications degraded at {e.label}", e.id, "R04"))
-        a = alert(fx, ctx, f"al-R04-{e.id}", sev, f"{e.label}: communications degraded", "; ".join(i.title for i in reports) or "Comms status reported degraded.", "R04",
+            fx.attention.append(Contribution(p[0], p[1], 30_000 if "comms_hub" in e.capabilities else 8_000, SEVERITY_WEIGHT[sev], f"Communications {word} at {e.label}", e.id, "R04"))
+        detail = (f"Comms status {status}. " if lost else "") + "; ".join(f"{i.title} ({i.id})" for i in reports[-3:]) + ("." if reports else "")
+        if "comms_hub" in e.capabilities:
+            detail += " Node is a comms hub: dependent circuits run degraded."
+        a = alert(fx, ctx, f"al-R04-{e.id}", sev, f"{e.label}: communications {word}", detail.strip(), "R04",
                   [i.id for i in reports], [e.id], [layer_for(e)], p)
         if p and "comms_hub" in e.capabilities:
             opts = [make_option(ctx, k, c, d, p, "Restore with", [f"Reposition {c.label} as relay for {e.label}", "Re-establish priority circuits", "Verify end-to-end connectivity"], ["R04"], 120, 0.75, "medium", {"crewHours": 10})
@@ -301,10 +442,10 @@ def r05(ctx: Context, fx: Effects) -> None:
         if p:
             fx.attention.append(Contribution(p[0], p[1], i.radiusM or 40_000, SEVERITY_WEIGHT[i.severity] * 1.2, f"{i.title}", node.id, "R05"))
         for dep in dependents:
-            st = fx.entity_status.setdefault(dep.id, {"notes": []})
-            st["readinessDelta"] = st.get("readinessDelta", 0) - 0.15
-            st["notes"].append(f"Depends on {node.label}: {i.title}")
-        a = alert(fx, ctx, f"al-R05-{node.id}", i.severity, i.title, i.text + (f" Dependent sites: {', '.join(d.label for d in dependents)}." if dependents else ""), "R05",
+            penalise(fx, dep.id, f"outage:{node.id}", -0.15, f"Depends on {node.label}: {i.title}")
+        wx = weather_cover(ctx, p)[1] if p else None
+        cause = f" {wx.title} ({wx.id}) is in force over the node: weather is a plausible cause." if wx else ""
+        a = alert(fx, ctx, f"al-R05-{node.id}", i.severity, i.title, i.text + (f" Dependent sites (−0.15 readiness each, once per outage): {', '.join(d.label for d in dependents)}." if dependents else "") + cause, "R05",
                   [i.id], [node.id] + [d.id for d in dependents], list(dict.fromkeys([layer_for(node)] + [layer_for(d) for d in dependents])), p)
         if p and "power" in i.tags:
             opts = [make_option(ctx, k, c, d, p, "Bridge outage with", [f"Deploy {c.label} with generator sets to dependent sites", "Prioritise medical, comms and command circuits", "Stand down when grid restores"], ["R05"], 180, 0.7, "medium", {"crewHours": 24, "generators": 2})
@@ -337,13 +478,17 @@ def r07(ctx: Context, fx: Effects) -> None:
         if i.channel != "weather_advisory" or not i.position:
             continue
         p = (i.position.longitudeDeg, i.position.latitudeDeg)
+        if not is_active(ctx, i):
+            # A forecast warning: show it, but readiness and tasking penalties apply only once it is in force.
+            alert(fx, ctx, f"al-R07-{i.id}", "info", i.title, i.text + f" Valid from {i.effectiveAt}; no readiness penalty until then.", "R07", [i.id], [], ["env.warnings"], p)
+            continue
         fx.attention.append(Contribution(p[0], p[1], i.radiusM or 50_000, SEVERITY_WEIGHT[i.severity] * 0.5, i.title, i.id, "R07"))
-        affected = [e.id for e in ctx.entities.values() if e.domain in ("air", "sea") and pos(e) and geo.haversine_m(pos(e), p) <= (i.radiusM or 50_000)]  # type: ignore[arg-type]
+        affected = [e.id for e in ctx.entities.values() if e.domain in ("air", "sea") and e.affiliation in ("own", "allied", "civil") and pos(e)
+                    and geo.haversine_m(pos(e), p) <= (i.radiusM or 50_000)]  # type: ignore[arg-type]
         for eid in affected:
-            st = fx.entity_status.setdefault(eid, {"notes": []})
-            st["readinessDelta"] = st.get("readinessDelta", 0) - 0.1
-            st["notes"].append(f"Weather: {i.title}")
-        alert(fx, ctx, f"al-R07-{i.id}", "advisory", i.title, i.text + f" {len(affected)} air/sea units inside the advisory area.", "R07", [i.id], affected[:40], ["env.warnings"], p)
+            penalise(fx, eid, "weather", -0.1, f"Weather: {i.title}")
+        alert(fx, ctx, f"al-R07-{i.id}", "advisory", i.title, i.text + f" {len(affected)} own/allied/civil air and sea units inside the advisory area: −0.1 readiness "
+              "(overlapping advisories do not stack).", "R07", [i.id], affected[:40], ["env.warnings"], p)
 
 
 @rule("R08", "Intelligence assessments raise area priority")
@@ -353,7 +498,7 @@ def r08(ctx: Context, fx: Effects) -> None:
             continue
         for ref in i.entityRefs:
             if ref.startswith("area-"):
-                fx.priorities[ref] = fx.priorities.get(ref, 1.0) * 1.3
+                raise_priority(fx, ref, 1.3, "intel_report", i)
         if i.position:
             fx.attention.append(Contribution(i.position.longitudeDeg, i.position.latitudeDeg, i.radiusM or 80_000, SEVERITY_WEIGHT[i.severity] * 0.9, i.title, i.id, "R08"))
         alert(fx, ctx, f"al-R08-{i.id}", i.severity, i.title, i.text, "R08", [i.id], [r for r in i.entityRefs if r in ctx.entities], ["picture.areas", "track.unknown"],
@@ -375,7 +520,9 @@ def r10(ctx: Context, fx: Effects) -> None:
                 blockers.append(f"{e.label} readiness {e.readiness.score:.2f}")
         mult = fx.priorities.get(area["id"], 1.0)
         status = "covered" if not blockers else ("degraded" if len(blockers) < len(req) else "uncovered")
-        fx.area_status[area["id"]] = {"status": status, "blockers": blockers, "priority": round(area["priority"] / mult, 2), "requires": area["requires"]}
+        basis = [f"×{m:g} {src.replace('_', ' ')} ({iid}: {title})" for src, (m, iid, title) in sorted(fx.priority_basis.get(area["id"], {}).items())]
+        fx.area_status[area["id"]] = {"status": status, "blockers": blockers, "priority": round(area["priority"] / mult, 2), "requires": area["requires"],
+                                      "priorityBasis": basis}
         if blockers:
             ring = area["ring"]
             cx = sum(p[0] for p in ring[:-1]) / (len(ring) - 1)
@@ -392,7 +539,7 @@ def r11(ctx: Context, fx: Effects) -> None:
         mult = 1.5 if i.channel == "command_directive" else 2.0
         for ref in i.entityRefs:
             if ref.startswith("area-"):
-                fx.priorities[ref] = fx.priorities.get(ref, 1.0) * mult
+                raise_priority(fx, ref, mult, i.channel, i)
             e = ctx.entities.get(ref)
             if e and pos(e):
                 p = pos(e)
@@ -452,50 +599,90 @@ def r14(ctx: Context, fx: Effects) -> None:
 
 @rule("R15", "Allied offers become intervention options")
 def r15(ctx: Context, fx: Effects) -> None:
+    """An allied offer becomes an option on unknown-track interventions it can actually serve: a maritime patrol (mpa)
+    offer only for surface tracks, and only for tracks inside the offer's declared area."""
     offers = [i for i in ctx.inputs if i.channel == "allied_liaison" and "offer" in i.tags]
     if not offers:
         return
     for iv in fx.interventions:
-        if iv.id.startswith("iv-R01-unk-sea") or iv.id.startswith("iv-R01-unk-air"):
-            for o in offers:
-                iv.options.append(InterventionOption(id=f"opt-allied-{o.id}", title=f"Request allied maritime patrol ({o.author})", rationale=o.text, steps=["Submit tasking request via liaison", "Share track data", "Receive identification report"],
-                                                     assignedEntityIds=[], etaMin=90, successLikelihood=0.66, riskLevel="low", resourceCost={"liaisonHours": 2}, ruleIds=["R15", "R01"],
-                                                     outcomes=[OutcomeBand(label="best", probability=0.3, timeToEffectMin=70, description="Allied sortie identifies the track."),
-                                                               OutcomeBand(label="expected", probability=0.36, timeToEffectMin=100, description="Identification during the sortie window."),
-                                                               OutcomeBand(label="worst", probability=0.34, timeToEffectMin=180, description="Sortie not tasked in time.")]))
+        if not iv.id.startswith("iv-R01-"):
+            continue
+        track = ctx.entities.get(iv.id[len("iv-R01-"):])
+        if track is None:
+            continue
+        for o in offers:
+            if "mpa" in o.tags and track.domain != "sea":
+                continue  # a maritime patrol aircraft does not identify a fast air track
+            where = ""
+            if o.position and o.radiusM and pos(track):
+                d = geo.haversine_m(pos(track), (o.position.longitudeDeg, o.position.latitudeDeg))  # type: ignore[arg-type]
+                if d > o.radiusM:
+                    continue
+                where = f" Track is {d / 1000:.0f} km from the centre of the offered area (radius {o.radiusM / 1000:.0f} km)."
+            iv.options.append(InterventionOption(id=f"opt-allied-{o.id}", title=f"Request allied {'maritime patrol' if 'mpa' in o.tags else 'support'} ({o.author})", rationale=o.text + where,
+                                                 steps=["Submit tasking request via liaison", "Share track data", "Receive identification report"],
+                                                 assignedEntityIds=[], etaMin=90, successLikelihood=0.66, riskLevel="low", resourceCost={"liaisonHours": 2}, ruleIds=["R15", "R01"],
+                                                 outcomes=[OutcomeBand(label="best", probability=0.3, timeToEffectMin=70, description="Allied sortie identifies the track."),
+                                                           OutcomeBand(label="expected", probability=0.36, timeToEffectMin=100, description="Identification during the sortie window."),
+                                                           OutcomeBand(label="worst", probability=0.34, timeToEffectMin=180, description="Sortie not tasked in time.")]))
+
+
+UAS_SITE_RADIUS_M = 6000  # a small UAS track this close to a site is activity *at* that site
+UAS_REPORT_ASSOC_M = 25_000  # positioned drone reports without a site reference attach to the nearest own site within this
 
 
 @rule("R16", "Small UAS activity near protected sites")
 def r16(ctx: Context, fx: Effects) -> None:
-    """Sensor-held small UAS tracks and drone reports within 6 km of an own site raise a counter-UAS response."""
+    """Sensor-held small UAS tracks within 6 km of an own or civil site, plus drone reports about the site (by reference, or
+    by position for police and public reports), raise a counter-UAS response. Severity rises with independent corroboration:
+    >= 2 tracks, or tracks confirmed by a second channel -> critical; tracks or >= 2 channels -> warning; one report -> advisory."""
     sites = [e for e in ctx.entities.values() if e.kind in ("facility", "infrastructure") and e.affiliation in ("own", "civil")]
     groups: dict[str, list[tuple[str, float]]] = {}
     for e in ctx.entities.values():
         if e.affiliation != "unknown" or "small_uas" not in e.tags or not pos(e):
             continue
         near = min(((s, geo.haversine_m(pos(e), pos(s))) for s in sites if pos(s)), key=lambda x: x[1], default=None)  # type: ignore[arg-type]
-        if near and near[1] < 6000:
+        if near and near[1] < UAS_SITE_RADIUS_M:
             groups.setdefault(near[0].id, []).append((e.id, near[1]))
     reports: dict[str, list[InputReport]] = {}
     for i in ctx.inputs:
-        if "drone" in i.tags or "small_uas" in i.tags:
-            for ref in i.entityRefs:
-                if ref in ctx.entities and ctx.entities[ref].kind in ("facility", "infrastructure"):
-                    reports.setdefault(ref, []).append(i)
-    for sid in set(groups) | set(reports):
+        if "drone" not in i.tags and "small_uas" not in i.tags:
+            continue
+        refs = [r for r in i.entityRefs if r in ctx.entities and ctx.entities[r].kind in ("facility", "infrastructure")]
+        if not refs and i.position:
+            ip = (i.position.longitudeDeg, i.position.latitudeDeg)
+            near = min(((s, geo.haversine_m(ip, pos(s))) for s in sites if pos(s) and s.affiliation == "own"), key=lambda x: x[1], default=None)  # type: ignore[arg-type]
+            if near and near[1] <= min(max(i.radiusM or 5_000, 5_000), UAS_REPORT_ASSOC_M):
+                refs = [near[0].id]
+        for ref in refs:
+            reports.setdefault(ref, []).append(i)
+    for sid in sorted(set(groups) | set(reports)):
         site = ctx.entities[sid]
         p = pos(site)
-        tracks = groups.get(sid, [])
+        tracks = sorted(groups.get(sid, []), key=lambda x: x[1])
         reps = reports.get(sid, [])
-        sev = "critical" if len(tracks) >= 2 else "warning"
+        # Independent channels: the sensor network (its tracks and its own detection reports count once), then each other channel.
+        channels = sorted({"sensor" if r.channel == "sensor_detection" else r.channel for r in reps} | ({"sensor"} if tracks else set()))
+        if len(tracks) >= 2 or (tracks and len(channels) >= 2):
+            sev = "critical"
+        elif tracks or len(channels) >= 2 or any(SEVERITY_RANK[r.severity] >= 2 for r in reps):
+            sev = "warning"
+        else:
+            sev = "advisory"
         if p:
             fx.attention.append(Contribution(p[0], p[1], 8_000, SEVERITY_WEIGHT[sev] * 1.4, f"Small UAS activity at {site.label}", sid, "R16"))
-        detail = (f"{len(tracks)} small UAS track(s) held within {max((d for _, d in tracks), default=0) / 1000:.1f} km of {site.label}. " if tracks else "") +                  (f"{len(reps)} report(s): " + "; ".join(r.title for r in reps[-3:]) + ". " if reps else "") +                  "Pattern consistent with reconnaissance of the site (persistent orbit, low level)."
-        a = alert(fx, ctx, f"al-R16-{sid}", sev, f"{site.label}: small UAS activity", detail, "R16", [r.id for r in reps], [sid] + [t for t, _ in tracks],
+        detail = (f"{len(tracks)} small UAS track(s) held {tracks[0][1] / 1000:.1f}-{tracks[-1][1] / 1000:.1f} km from {site.label} (inside {UAS_SITE_RADIUS_M / 1000:.0f} km). " if tracks else
+                  f"No small UAS track held by sensors near {site.label}. ")
+        if reps:
+            detail += f"{len(reps)} report(s): " + "; ".join(f"{r.title} ({r.id})" for r in reps[-3:]) + ". "
+        detail += f"Independent channels: {', '.join(c.replace('_', ' ') for c in channels)} ({len(channels)}). "
+        if tracks and any("low_level" in ctx.entities[t].tags for t, _ in tracks):
+            detail += "Persistent low-level orbit is consistent with reconnaissance of the site."
+        a = alert(fx, ctx, f"al-R16-{sid}", sev, f"{site.label}: small UAS activity", detail.strip(), "R16", [r.id for r in reps], [sid] + [t for t, _ in tracks],
                   ["track.unknown", "sites.air" if "fighter" in site.capabilities or "transport" in site.capabilities else "sites.land"], p)
-        fx.traces.append({"rule": "R16", "subject": sid, "tracks": [t for t, _ in tracks], "reports": [r.id for r in reps]})
-        if not p:
-            continue
+        fx.traces.append({"rule": "R16", "subject": sid, "tracks": [t for t, _ in tracks], "reports": [r.id for r in reps], "channels": channels, "severity": sev})
+        if not p or sev == "advisory":
+            continue  # a single uncorroborated report is shown, not answered with a counter-UAS tasking
         opts = []
         k = 1
         for c, d in candidates(ctx, ["air_defence"], p, ["land"], limit=2):
@@ -509,7 +696,8 @@ def r16(ctx: Context, fx: Effects) -> None:
 
 @rule("R18", "GNSS interference")
 def r18(ctx: Context, fx: Effects) -> None:
-    """Reports of GNSS jamming or spoofing degrade navigation for every air and sea platform inside the area."""
+    """Reports of GNSS jamming or spoofing degrade navigation for every own or civil air and sea platform inside the area.
+    Overlapping reports of the same interference (a sensor report and a liaison report) cost the penalty once."""
     for i in ctx.inputs:
         if not ({"gnss", "spoofing"} & set(i.tags)) or not i.position:
             continue
@@ -517,11 +705,10 @@ def r18(ctx: Context, fx: Effects) -> None:
         r = i.radiusM or 100_000
         affected = [e for e in ctx.entities.values() if e.domain in ("air", "sea") and e.affiliation in ("own", "civil") and pos(e) and geo.haversine_m(pos(e), p) <= r]  # type: ignore[arg-type]
         for e in affected:
-            st = fx.entity_status.setdefault(e.id, {"notes": []})
-            st["readinessDelta"] = st.get("readinessDelta", 0) - 0.08
-            st["notes"].append(f"GNSS degraded: {i.title}")
+            penalise(fx, e.id, "gnss", -0.08, f"GNSS degraded: {i.title}")
         fx.attention.append(Contribution(p[0], p[1], r, SEVERITY_WEIGHT[i.severity] * 0.9, i.title, i.id, "R18"))
-        alert(fx, ctx, f"al-R18-{i.id}", i.severity, i.title, i.text + f" {len(affected)} own or civil air/sea platforms inside the area; inertial or terrestrial navigation advised.",
+        alert(fx, ctx, f"al-R18-{i.id}", i.severity, i.title, i.text + f" {len(affected)} own or civil air/sea platforms within {r / 1000:.0f} km: −0.08 readiness "
+              "(not stacked across overlapping reports); inertial or terrestrial navigation advised.",
               "R18", [i.id], [e.id for e in affected][:40], ["analysis.gnss", "air.fighter", "sea.combat"], p)
 
 
@@ -543,12 +730,38 @@ def r19(ctx: Context, fx: Effects) -> None:
             intervention(ctx, fx, f"iv-R19-{i.id}", a, "Establish what the vessel is doing over the corridor", p, opts)
 
 
+@rule("R20", "Emergency squawks on real air traffic")
+def r20(ctx: Context, fx: Effects) -> None:
+    """A real ADS-B emergency squawk (7500 unlawful interference, 7600 radio failure, 7700 general emergency) is an alert at
+    the report's severity. A civil emergency (112) report within 50 km corroborates it; 7700 and 7500 get search-and-rescue
+    options. Public broadcast data: the alert describes the squawk, not the aircraft's intent."""
+    for i in ctx.inputs:
+        if "squawk" not in i.tags or not i.position:
+            continue
+        p = (i.position.longitudeDeg, i.position.latitudeDeg)
+        near_112 = [c for c in ctx.inputs if c.channel == "civil_emergency" and c.position
+                    and geo.haversine_m(p, (c.position.longitudeDeg, c.position.latitudeDeg)) <= 50_000]
+        fx.attention.append(Contribution(p[0], p[1], 40_000, SEVERITY_WEIGHT[i.severity], i.title, i.id, "R20"))
+        detail = i.text + (f" Corroborated by civil emergency report(s): {', '.join(f'{c.title} ({c.id})' for c in near_112[:2])}." if near_112 else
+                           " No civil emergency report within 50 km yet.")
+        a = alert(fx, ctx, f"al-R20-{i.id}", i.severity, i.title, detail, "R20", [i.id] + [c.id for c in near_112[:3]], [], ["live.air"], p)
+        if "7600" in i.title:
+            continue  # radio failure: an air-traffic matter, no military tasking proposed
+        opts = [make_option(ctx, k, c, d, p, "Stand by with", [f"Bring {c.label} to readiness for search and rescue", "Coordinate with the JRCC and air traffic control",
+                                                                "Launch on request"], ["R20"], 60, 0.75, "low", {"flightHours": round(d / 1000 / 200, 2), "crewHours": 6})
+                for k, (c, d) in enumerate(candidates(ctx, ["sar", "medevac"], p, ["air"], limit=2), 1)]
+        intervention(ctx, fx, f"iv-R20-{i.id}", a, "Be ready to support search and rescue for the aircraft in distress", p, opts)
+
+
 AIS_DARK_WINDOW = (900.0, 1500.0, 1800.0)  # scripted: the suspect tanker stops transmitting 900–1500 s into every 30 min
+CABLE_LOITER_M = 3000  # within this of a cable or pipeline
+LOITER_MPS = 1.6  # ~3 kn: below this a merchant is not on passage
 
 
 @rule("R17", "Maritime anomaly over undersea infrastructure")
 def r17(ctx: Context, fx: Effects) -> None:
-    """Slow loitering within 3 km of an undersea cable or pipeline, plus AIS gaps, indicate a sabotage risk."""
+    """Slow loitering within 3 km of an undersea cable or pipeline, plus AIS gaps, indicate a sabotage risk. An active
+    weather advisory over the vessel is a benign explanation for slow speed (not for AIS gaps) and lowers the severity."""
     for e in ctx.entities.values():
         if e.domain != "sea" or e.affiliation not in ("unknown", "hostile_suspected") or not pos(e):
             continue
@@ -556,21 +769,42 @@ def r17(ctx: Context, fx: Effects) -> None:
         near = None
         for c in ctx.cables:
             d = _dist_to_line(p, c["coords"])  # type: ignore[arg-type]
-            if d < 3000 and (near is None or d < near[1]):
+            if d < CABLE_LOITER_M and (near is None or d < near[1]):
                 near = (c, d)
         dark = "ais_gaps" in e.tags and AIS_DARK_WINDOW[0] <= ctx.t % AIS_DARK_WINDOW[2] < AIS_DARK_WINDOW[1]
         if dark:
             fx.entity_status.setdefault(e.id, {"notes": []}).setdefault("flags", []).append("dark")
-        slow = e.kinematics is not None and (e.kinematics.speedMps or 0) < 1.6
+        speed = (e.kinematics.speedMps or 0) if e.kinematics else 0.0
+        slow = e.kinematics is not None and speed < LOITER_MPS
         if not near or not (slow or dark):
             continue  # transiting across a corridor at speed is normal traffic
         cable, d = near
-        sev = "critical" if (dark or "ais_gaps" in e.tags) and slow else "warning"
+        gaps = dark or "ais_gaps" in e.tags
+        wx = weather_cover(ctx, p)[1]
+        if gaps and slow:
+            sev = "critical"
+        elif slow and wx is not None and not gaps:
+            sev = "advisory"
+        else:
+            sev = "warning"
         fx.attention.append(Contribution(p[0], p[1], 15_000, SEVERITY_WEIGHT[sev] * 1.3, f"{e.label} loitering over {cable['label']}", e.id, "R17"))
-        detail = f"{e.label} at {(e.kinematics.speedMps or 0) * 1.944:.1f} kn, {d:.0f} m from {cable['label']}. " +                  ("AIS transmissions currently absent (dark period). " if dark else ("Intermittent AIS gaps recorded. " if "ais_gaps" in e.tags else "")) +                  "Slow, course-changing movement over the corridor is consistent with anchor dragging or survey activity."
+        fired = []
+        if slow:
+            fired.append(f"speed {speed * 1.944:.1f} kn < {LOITER_MPS * 1.944:.0f} kn")
+        fired.append(f"{d:.0f} m from {cable['label']} (< {CABLE_LOITER_M / 1000:.0f} km)")
+        if dark:
+            fired.append("AIS transmissions currently absent (dark period)")
+        elif "ais_gaps" in e.tags:
+            fired.append("intermittent AIS gaps recorded")
+        detail = f"{e.label}: " + "; ".join(fired) + ". "
+        detail += ("Slow movement over the corridor with AIS gaps is consistent with anchor dragging or survey activity." if slow and gaps else
+                   "Slow movement over the corridor is consistent with anchor dragging or survey activity." if slow else
+                   "AIS dark over the corridor; speed not anomalous.")
+        if wx is not None and slow:
+            detail += f" {wx.title} ({wx.id}) is in force here: heavy weather can also explain the low speed{'' if not gaps else ', not the AIS gaps'}."
         a = alert(fx, ctx, f"al-R17-{e.id}", sev, f"{e.label}: loitering over undersea infrastructure", detail, "R17",
-                  [i.id for i in inputs_for(ctx, e.id)], [e.id], ["track.unknown", "infra.cables"], p)
-        fx.traces.append({"rule": "R17", "subject": e.id, "cable": cable["id"], "distanceM": round(d), "dark": dark, "slow": slow})
+                  [i.id for i in inputs_for(ctx, e.id)] + ([wx.id] if wx is not None and slow else []), [e.id], ["track.unknown", "infra.cables"], p)
+        fx.traces.append({"rule": "R17", "subject": e.id, "cable": cable["id"], "distanceM": round(d), "dark": dark, "slow": slow, "weather": wx.id if wx is not None else None})
         opts = []
         for k, (c, dist) in enumerate(candidates(ctx, ["patrol", "surface", "sar"], p, ["sea", "air"], limit=3), 1):
             opts.append(make_option(ctx, k, c, dist, p, "Shadow and hail with", [f"Vector {c.label} to {e.label}", "Hail on VHF 16 and request intentions", "Document anchor position and seabed contact", "Coordinate with coast guard for boarding"],
@@ -593,16 +827,60 @@ def _dist_to_line(p: tuple[float, float], coords: list[list[float]]) -> float:
     return best
 
 
+def merge_alerts(alerts: list[Alert]) -> list[Alert]:
+    """One alert per id. A rule fires once per input, so the same subject can raise its alert several times (two fault
+    reports on one vehicle, two reports of one outage). The highest severity wins (the newest on a tie); input, entity and
+    layer references are united so no source drops out of the trace, and the detail notes what else was reported."""
+    merged: dict[str, Alert] = {}
+    extra: dict[str, list[str]] = {}
+    for a in alerts:
+        cur = merged.get(a.id)
+        if cur is None:
+            merged[a.id] = a
+            continue
+        keep, other = (a, cur) if SEVERITY_RANK[a.severity] >= SEVERITY_RANK[cur.severity] else (cur, a)
+        keep.inputIds = list(dict.fromkeys(cur.inputIds + a.inputIds))
+        keep.entityIds = list(dict.fromkeys(cur.entityIds + a.entityIds))
+        keep.layerIds = list(dict.fromkeys(cur.layerIds + a.layerIds))
+        keep.recommendedInterventionId = keep.recommendedInterventionId or other.recommendedInterventionId
+        notes = extra.setdefault(a.id, [])
+        if other.detail != keep.detail and other.detail not in notes:
+            notes.append(other.detail)
+        merged[a.id] = keep
+    for aid, notes in extra.items():
+        a = merged[aid]
+        if notes:
+            more = " | ".join(n if len(n) <= 160 else n[:157] + "..." for n in notes[-2:])
+            a.detail = f"{a.detail} Also reported ({len(notes)}): {more}"
+    return sorted(merged.values(), key=lambda a: (-SEVERITY_RANK[a.severity], a.id))
+
+
+ACK_ATTENTION_FACTOR = 0.5  # an acknowledged alert keeps half its attention weight: seen, not resolved
+
+
+def discount_acknowledged(ctx: Context, fx: Effects) -> None:
+    """Attention that belongs to an acknowledged alert (same rule, same subject) is halved, so unseen problems rank first."""
+    if not ctx.acknowledged:
+        return
+    for c in fx.attention:
+        if f"al-{c.rule_id}-{c.contributor}" in ctx.acknowledged:
+            c.weight = round(c.weight * ACK_ATTENTION_FACTOR, 4)
+            c.reason = f"{c.reason} (acknowledged)"
+
+
 def evaluate(ctx: Context) -> Effects:
     fx = Effects()
+    post = []
     for rule_id, _title, fn in RULES:
+        if rule_id in POST_RULES:
+            post.append(fn)
+            continue
         fn(ctx, fx)
-    # Dedupe alerts by id (a rule may fire once per input per entity) keeping the highest severity.
-    seen: dict[str, Alert] = {}
-    for a in fx.alerts:
-        if a.id not in seen or SEVERITY_RANK[a.severity] > SEVERITY_RANK[seen[a.id].severity]:
-            seen[a.id] = a
-    fx.alerts = sorted(seen.values(), key=lambda a: (-SEVERITY_RANK[a.severity], a.id))
+    settle_interventions(ctx, fx)
+    for fn in post:  # mid-intervention monitoring sees every intervention, whichever rule raised it
+        fn(ctx, fx)
+    fx.alerts = merge_alerts(fx.alerts)
+    discount_acknowledged(ctx, fx)
     from . import deception, fusion  # noqa: PLC0415  (assessment layers run after every rule has fired)
     fx.fusion = fusion.assess(ctx, fx)
     fx.deception = deception.assess(ctx, fx)

@@ -28,13 +28,15 @@ Real public feeds are marked `real` in the layer tree and the inspector.
 - **Fusion that explains itself.** The inspector shows **Why** (sources graded on the Admiralty scale, corroboration,
   identity hypotheses), **Prediction** (competing trajectory hypotheses with probabilities), **Deception** (named
   indicators with log-odds weights) and **Actions**.
-- **Rules R01–R19** (18 rules) produce attention, alerts, interventions and predictions, each with its trace;
+- **19 rules (R01–R20)** produce attention, alerts, interventions and predictions, each with its trace;
   the optimiser assigns units to interventions (Hungarian). See [rules](docs/geospatial/rules.md).
 - **Analysis surfaces** on H3 hexagons: fusion attention, threat reach, sensor and air-defence coverage, response time,
   flight conditions (real weather) and GNSS interference (real ADS-B). One at a time.
 - **Route planning.** Pick a destination: options on roads, water or in the air with ETA, fuel, and exposure to threat
   corridors and weather warnings; ground routes avoid live road incidents; with Lantmäteriet credentials each option
   also gets a terrain profile and air options a terrain-clearance check. Executing an option makes the unit move.
+- **Map tools (`T`).** Measure (`M`), line of sight (`V`), range ring (`C`) and a cursor elevation readout (`E`).
+  Line of sight and elevation use Lantmäteriet terrain and say "not configured" when the server has no credentials.
 - **Simulation.** Run at ×10 to ×300, replay the past, look ahead; inject six scenario presets (drone swarm, cable
   damage, air raid, GNSS jamming, power outage, disinformation) and watch the rules react.
 - **Roles and modes.** Ten roles (national, air, maritime, army, intelligence, police, civil defence, logistics, two
@@ -87,14 +89,14 @@ Set in the shell or in a gitignored `backend/.env` (loaded at start-up).
 | `OPENSKY_CLIENT_ID`, `OPENSKY_CLIENT_SECRET` | OpenSky OAuth for the ADS-B fallback |
 | `LANTMATERIET_USERNAME`, `LANTMATERIET_PASSWORD` | Geotorget account for Markhöjd Direkt (alternatives: `LANTMATERIET_CLIENT_ID` / `LANTMATERIET_CLIENT_SECRET`, or `LANTMATERIET_TOKEN`) |
 
-Shortcuts: `/` search · `L` layers · `A` alerts · `D` decisions · `S` simulate · `R` report · `I` sources · `3` 3D ·
+Shortcuts: `/` search · `L` layers · `A` alerts · `D` decisions · `S` time & scenarios · `R` new report · `I` sources · `T` map tools · `3` 3D ·
 `F` follow · `Space` pause/resume · `Esc` close · `Home` reset.
 
 ## Check
 
 ```powershell
-cd backend;  $env:TROSSOPS_FEEDS="off"; python -m pytest -q            # 112 tests, no network
-cd frontend; npm run typecheck; npm test; npm run build                # 63 unit tests
+cd backend;  $env:TROSSOPS_FEEDS="off"; python -m pytest -q            # 152 tests, no network
+cd frontend; npm run typecheck; npm test; npm run build                # 72 unit tests
 cd frontend; $env:BROWSER_CHANNEL="msedge"; npm run verify             # browser smoke, needs API + UI running
 ```
 

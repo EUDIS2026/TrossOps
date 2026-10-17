@@ -153,9 +153,10 @@ await step('E2E-02', 'Every role and every mode can be selected from the top bar
 })
 
 await step('E2E-03', 'Each Dock panel opens a drawer with content', async () => {
-  const buttons = page.locator('.dock > .dock-btn')
-  const sep = await run(() => [...document.querySelectorAll('.dock > *')].findIndex(el => el.classList.contains('dock-sep')))
-  const count = sep > 0 ? sep : await buttons.count()
+  // panel buttons carry data-panel; the map-tools, 3D and basemap buttons do not open a drawer
+  const buttons = page.locator('.dock > .dock-btn[data-panel]')
+  const count = await buttons.count()
+  expect(count >= 7, 'fewer than 7 panel buttons in the dock', { count })
   const opened = {}
   for (let i = 0; i < count; i++) {
     await buttons.nth(i).click(); await wait(500)
@@ -247,7 +248,7 @@ await step('E2E-08', 'Selecting an airbase flies in and loads its layout', async
 })
 
 await step('E2E-09', '3D toggle switches the scene to perspective with 3D models and back', async () => {
-  const btn = page.locator('.dock > .dock-sep ~ .dock-btn').first()
+  const btn = page.locator('.dock > .dock-btn[aria-keyshortcuts="3"]')
   // Selecting a site (previous step) switches 3D on by itself; start from a settled top-down camera. The app only
   // re-pitches a camera that is not already easing, so every transition below waits for the camera to settle.
   const settled = () => until(() => !window.__map.isMoving(), null, 15_000, 'camera to stop moving').then(() => wait(700))
@@ -260,7 +261,7 @@ await step('E2E-09', '3D toggle switches the scene to perspective with 3D models
     throw new Error(`${e.message}; state ${JSON.stringify(await run(() => ({ pitch: window.__map.getPitch(), moving: window.__map.isMoving(), zoom: window.__map.getZoom(), s: window.__store.get().threeD, sel: window.__store.get().selected, follow: window.__store.get().follow, mode: window.__store.get().modeId })))}`)
   })
   await wait(3000)
-  const on = await run(() => ({ pressed: document.querySelector('.dock > .dock-sep ~ .dock-btn')?.getAttribute('aria-pressed'), pitch: Math.round(window.__map.getPitch()),
+  const on = await run(() => ({ pressed: document.querySelector('.dock > .dock-btn[aria-keyshortcuts="3"]')?.getAttribute('aria-pressed'), pitch: Math.round(window.__map.getPitch()),
     models: window.__scene.models?.enabled, instances: window.__scene.models?.instances?.length ?? null, terrain: !!window.__map.getTerrain?.() }))
   expect(on.pressed === 'true' && on.models === true, '3D button not pressed or model layer not enabled', on)
   expect(on.instances === null || on.instances > 3, 'fewer than 4 3D model instances at the airbase', on)

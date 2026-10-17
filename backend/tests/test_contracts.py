@@ -71,15 +71,10 @@ def test_police_event_inputs_validate_and_reach_the_engine(client):
         feeds.POLISEN._data = None
 
 
-def test_operators_cannot_post_feed_only_channels(client):
-    body = {"channel": "police_event", "authorLevel": "operator", "author": "x", "title": "t", "text": "t"}
-    assert client.post("/api/inputs", json=body).status_code == 422
-
-
 def test_channel_unions_match_the_frontend():
     from app import models
     from app.inputs import CHANNEL_META
-    backend = set(typing.get_args(models.Channel)) | set(typing.get_args(models.FeedChannel))
+    backend = set(typing.get_args(models.Channel))
     assert ts_union("Channel") == backend
     assert set(CHANNEL_META) == set(typing.get_args(models.Channel))
 

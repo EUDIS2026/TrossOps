@@ -7,6 +7,7 @@ import { Dock, Drawer } from './ui/Dock'
 import { Inspector } from './ui/Inspector'
 import { HoverCard, Kpis, Legend, RouteBanner, Timeline, Toasts } from './ui/Overlays'
 import { TopBar } from './ui/TopBar'
+import { MapToolsLayer } from './ui/tools/ToolsControl'
 
 const KEYS: Record<string, Panel> = { l: 'layers', a: 'feed', d: 'decisions', s: 'scenario', r: 'report', i: 'sources', '?': 'help' }
 
@@ -16,6 +17,8 @@ function useShortcuts(rt: Runtime | null) {
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') { if (e.key === 'Escape') (e.target as HTMLElement).blur(); return }
       if (e.metaKey || e.ctrlKey || e.altKey) return
+      // Space and Enter belong to a focused control (button, switch, tab), not to the clock
+      if ((e.key === ' ' || e.key === 'Enter') && (e.target as HTMLElement)?.closest?.('button, [role="button"], a')) return
       const k = e.key.toLowerCase()
       if (k === '/') { e.preventDefault(); (document.querySelector('.search input') as HTMLInputElement | null)?.focus(); return }
       if (KEYS[k]) { actions.togglePanel(KEYS[k]); return }
@@ -61,6 +64,7 @@ export function App() {
       <HoverCard />
       <Timeline />
       <Toasts />
+      <MapToolsLayer />
     </div>
   </RuntimeContext.Provider>
 }
