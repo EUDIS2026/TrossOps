@@ -48,6 +48,7 @@ LAYERS: list[LayerDef] = [
     L("civil.coastguard", "Coast guard", "Coast guard vessels (synthetic positions)"),
     L("civil.police_events", "Police events", "Public police event feed (polisen.se, real, municipality-level positions)", ["public"]),
     L("civil.crisis", "Crisis information", "Krisinformation.se news and public warnings (real)", ["public"]),
+    L("civil.traffic", "Road incidents", "Trafikverket accidents, obstructions and restrictions (real); ground routes avoid them", ["public"]),
     L("live.air", "Air traffic", "Live ADS-B aircraft over Sweden and the Baltic (adsb.lol / OpenSky, real)", ["observed"], supports3d=True),
     L("live.air_mil", "Military-flagged aircraft", "Live ADS-B aircraft flagged as military in the public database (real)", ["observed"], supports3d=True),
     L("live.sea", "Ship traffic", "Live AIS vessel positions (Digitraffic / AISStream, real)", ["observed"], supports3d=True),
@@ -56,6 +57,7 @@ LAYERS: list[LayerDef] = [
     L("env.obs", "Weather stations", "SMHI observations, latest hour (real)", ["public"]),
     L("env.warnings", "Weather warnings", "SMHI impact-based warnings (real)", ["public"]),
     L("env.daylight", "Day / night", "Solar terminator and twilight (computed)", ["public"]),
+    L("env.fires", "Active fires", "NASA FIRMS VIIRS thermal anomalies, last 24 h (real)", ["public"]),
     L("track.unknown", "Unknown & suspect tracks", "Sensor tracks without resolved identity", ["observed"]),
     L("picture.predictions", "Predictions", "Competing trajectory hypotheses with probabilities", ["predicted"]),
     L("picture.plans", "Planned routes", "Committed trajectory plans and declared convoy routes", ["planned"]),
@@ -107,14 +109,14 @@ ROLES: list[RoleDef] = [
     RoleDef(id="air_ops", label="Air operations", scope="functional", description="Air picture, combat air patrols, airbases and flight weather.", defaultModeId="picture", modes=[
         mode("picture", "Air picture", "Own air, real traffic, unknown tracks and coverage", AIR + ["live.air", "live.air_mil", "land.ad", "infra.sensors", "picture.predictions", "analysis.coverage"], CAM_BALTIC, ["airborne", "unknown", "airReady"]),
         mode("airbases", "Airbases", "Inside the bases: shelters, aircraft, fuel, ammunition, defence", AIR + ["sites.air", "land.ad", "env.obs"], {"lng": 14.37, "lat": 55.99, "zoom": 13.4, "pitch": 60, "bearing": -30}, ["airReady", "fuel", "faults"]),
-        mode("weather", "Flight weather", "Flight conditions, radar, wind and warnings", AIR + ["analysis.weather", "env.radar", "env.wind", "env.warnings", "env.obs"], CAM_NATIONAL, ["airborne", "weather", "airReady"]),
+        mode("weather", "Flight weather", "Flight conditions, radar, wind and warnings", AIR + ["analysis.weather", "env.radar", "env.wind", "env.warnings", "env.obs", "env.fires"], CAM_NATIONAL, ["airborne", "weather", "airReady"]),
     ]),
     RoleDef(id="maritime_ops", label="Maritime operations", scope="functional", description="Sea picture, real shipping, undersea infrastructure and approaches.", defaultModeId="picture", modes=[
         mode("picture", "Sea picture", "Own ships, real AIS traffic and unknown contacts", SEA + ["civil.coastguard", "live.sea", "picture.predictions", "infra.sensors", "sites.sea"], CAM_BALTIC, ["unknown", "seaReady", "deception"]),
         mode("infrastructure", "Undersea infrastructure", "Cable corridors, loitering and AIS anomalies", ["infra.cables", "live.sea", "sea.combat", "civil.coastguard", "picture.predictions", "analysis.fusion"], CAM_GOTLAND, ["deception", "unknown", "critical"]),
     ]),
     RoleDef(id="land_ops", label="Army operations", scope="functional", description="Brigades down to each vehicle on its road; fires, air defence and sustainment.", defaultModeId="manoeuvre", modes=[
-        mode("manoeuvre", "Manoeuvre", "Brigades, battalions and companies on the road network", LAND + ["land.homeguard", "sites.land", "picture.plans", "analysis.response"], CAM_SOUTH, ["landReady", "moving", "alerts"]),
+        mode("manoeuvre", "Manoeuvre", "Brigades, battalions and companies on the road network", LAND + ["land.homeguard", "sites.land", "picture.plans", "analysis.response", "civil.traffic"], CAM_SOUTH, ["landReady", "moving", "alerts"]),
         mode("logistics", "Sustainment", "Supply convoys, fuel and depots", ["land.logistics", "sites.logistics", "sites.land", "sea.support", "picture.plans"], CAM_NATIONAL, ["fuel", "faults", "interventions"]),
     ]),
     RoleDef(id="intelligence", label="Intelligence", scope="functional", description="Fusion, deception indicators, predictions and coverage.", defaultModeId="assessment", modes=[
@@ -123,11 +125,11 @@ ROLES: list[RoleDef] = [
         mode("gnss", "GNSS interference", "Real ADS-B integrity reports aggregated into hexes", ["live.air", "analysis.gnss"], CAM_BALTIC, ["unknown", "alerts", "inputs"]),
     ]),
     RoleDef(id="police", label="Police & emergency services", scope="functional", description="Patrol cars and ambulances on city streets, police events and crisis information.", defaultModeId="patrol", modes=[
-        mode("patrol", "Patrol picture", "Patrol cars and ambulances roaming city streets", ["civil.police", "civil.ems", "civil.police_events", "civil.crisis", "picture.reports"], CAM_STHLM, ["incidents", "alerts", "inputs"]),
+        mode("patrol", "Patrol picture", "Patrol cars and ambulances roaming city streets", ["civil.police", "civil.ems", "civil.police_events", "civil.crisis", "picture.reports", "civil.traffic"], CAM_STHLM, ["incidents", "alerts", "inputs"]),
         mode("national", "National events", "Police events and crisis information nationwide", ["civil.police_events", "civil.crisis", "env.warnings", "civil.police", "analysis.fusion"], CAM_NATIONAL, ["incidents", "weather", "alerts"]),
     ]),
     RoleDef(id="civil_defence", label="Civil defence", scope="functional", description="Emergencies, infrastructure and public information.", defaultModeId="emergencies", modes=[
-        mode("emergencies", "Emergencies", "Incidents, medevac and medical capacity", ["picture.reports", "civil.ems", "air.rotary", "sites.medical", "env.warnings", "civil.crisis"], CAM_NATIONAL, ["incidents", "infra", "weather"]),
+        mode("emergencies", "Emergencies", "Incidents, medevac and medical capacity", ["picture.reports", "civil.ems", "air.rotary", "sites.medical", "env.warnings", "civil.crisis", "env.fires"], CAM_NATIONAL, ["incidents", "infra", "weather"]),
         mode("infrastructure", "Infrastructure", "Grid, telecom, ports, crossings and cables", INFRA + ["infra.cables", "civil.police_events", "picture.reports", "analysis.fusion"], CAM_NATIONAL, ["infra", "incidents", "alerts"]),
     ]),
     RoleDef(id="logistics", label="Logistics", scope="functional", description="Depots, convoys, fuel autonomy and recovery.", defaultModeId="supply", modes=[

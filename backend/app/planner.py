@@ -77,7 +77,7 @@ def _option(oid: str, label: str, e: SceneEntity, coords: list[tuple[float, floa
             "feasible": not (fuel is not None and fuel - burn < 5), "notes": notes, "basedOn": based_on, "airborne": e.domain == "air"}
 
 
-def plan(e: SceneEntity, to: tuple[float, float], predictions: list, restricted: list[dict], warnings: list[dict]) -> dict:
+def plan(e: SceneEntity, to: tuple[float, float], predictions: list, restricted: list[dict], warnings: list[dict], road_incidents: list[dict] | None = None) -> dict:
     if not e.position:
         raise ValueError("entity has no position")
     start = (e.position.longitudeDeg, e.position.latitudeDeg)
@@ -87,14 +87,17 @@ def plan(e: SceneEntity, to: tuple[float, float], predictions: list, restricted:
         from . import geonet  # noqa: PLC0415
         cap = ROAD_CAP.get(e.modelKey or "", 16.0)
         net = geonet.national()
-        fast = net.route(start, to, max_speed_mps=cap)
+        # real road obstructions and restrictions (Trafikverket) are impassable for a column
+        blocks = [[(q[0], q[1]) for q in geo.circle_ring((i['lng'], i['lat']), 250, 12)] for i in (road_incidents or [])
+                  if i.get('lng') is not None and i.get('type') in ('Hinder', 'Restriktion', 'Olycka')]
+        fast = net.route(start, to, avoid=blocks or None, max_speed_mps=cap)
         if not fast:
             raise ValueError("no road route")
         speeds = _road_speeds(fast.coords, fast.duration_s, cap)
         options.append(_option("fastest", "Fastest by road", e, fast.coords, [None] * len(fast.coords), speeds, zones, warnings,
-                               [f"national road graph (OSM via OpenFreeMap), {len(fast.coords)} vertices", f"convoy speed capped at {cap * 3.6:.0f} km/h for {e.platform or e.kind}",
+                               [f"national road graph (OSM via OpenFreeMap), {len(fast.coords)} vertices", f"avoids {len(blocks)} live road incidents (Trafikverket)", f"convoy speed capped at {cap * 3.6:.0f} km/h for {e.platform or e.kind}",
                                 f"class speeds: {', '.join(f'{k} {v / 1000:.0f} km' for k, v in sorted(fast.classes_m.items(), key=lambda kv: -kv[1])[:3])}"]))
-        avoid_rings = [z["ring"] for z in zones]
+        avoid_rings = [z["ring"] for z in zones] + blocks
         if avoid_rings:
             safe = net.route(start, to, avoid=avoid_rings, max_speed_mps=cap)
             if safe and _length(safe.coords) > _length(fast.coords) * 1.01:

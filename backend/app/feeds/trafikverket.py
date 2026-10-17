@@ -3,7 +3,7 @@
 POST `https://api.trafikinfo.trafikverket.se/v2/data.json` with an XML query body; requires a free key in
 `TRAFIKVERKET_API_KEY`. Response: `{"RESPONSE": {"RESULT": [{"Situation": [{"Deviation": [...]}]}]}}`; an error is
 reported as `RESULT[0].ERROR` (e.g. HTTP 401 "Invalid authentication"). One item per deviation. Geometry is a WKT
-string — `Geometry.Point.WGS84` (schema 1.5) or `Geometry.WGS84` (older schemas); the first coordinate is used.
+string — `Geometry.WGS84` (namespace road.trafficinfo, schema 1.6) or `Geometry.Point.WGS84`; the first coordinate is used.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ _WKT_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)")
 def query_xml(key: str, limit: int = 1000) -> str:
     types = "".join(f'<EQ name="Deviation.MessageType" value={quoteattr(t)} />' for t in MESSAGE_TYPES)
     return (f"<REQUEST><LOGIN authenticationkey={quoteattr(key)} />"
-            f'<QUERY objecttype="Situation" schemaversion="1.5" limit="{int(limit)}">'
+            f'<QUERY objecttype="Situation" namespace="road.trafficinfo" schemaversion="1.6" limit="{int(limit)}">'
             f"<FILTER><OR>{types}</OR></FILTER></QUERY></REQUEST>")
 
 
