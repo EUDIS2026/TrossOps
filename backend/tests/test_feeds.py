@@ -687,3 +687,29 @@ def test_markhojd_basic_auth_with_geotorget_account(monkeypatch):
     feeds.MARKHOJD.transport = mock([("markhojd/v1/hojd", hojd)])
     assert feeds.MARKHOJD.get()["status"] == "working"
     assert seen == ["Basic " + base64.b64encode(b"user@example.org:pw").decode()]
+
+
+# ---- Edge cache headers -------------------------------------------------------------------------------------------------------
+def test_edge_cache_policy_follows_feed_ttl_and_status():
+    from app.feeds.base import edge_cache_header
+    assert edge_cache_header(10, "working") == "max-age=5, stale-while-revalidate=10"  # ADS-B: floor of 5 s fresh
+    assert edge_cache_header(30, "partial") == "max-age=15, stale-while-revalidate=30"
+    assert edge_cache_header(600, "working") == "max-age=300, stale-while-revalidate=600"
+    assert edge_cache_header(3600, "working") == "max-age=300, stale-while-revalidate=3600"  # capped at 5 min fresh
+    for status in ("blocked", "adapter-only", ""):
+        assert edge_cache_header(600, status) == "max-age=5"  # no data: brief, no stale serving
+
+
+def test_router_feed_endpoints_set_edge_and_browser_cache_headers(api):
+    feeds.ADSB.transport = mock([("api.adsb.lol", "adsb_lol.json")])
+    feeds.SWPC.transport = mock([("swpc.noaa.gov", 503)])
+    r = api.get("/api/live/aircraft")
+    assert r.headers["vercel-cdn-cache-control"] == "max-age=5, stale-while-revalidate=10"
+    assert r.headers["cache-control"] == "public, max-age=0, must-revalidate"  # browsers always revalidate
+    body = r.json()
+    assert body["generatedAt"] and body["ttlS"] == 10.0 and body["fetchedAt"] <= body["generatedAt"]
+    assert api.get("/api/live/gnss").headers["vercel-cdn-cache-control"].startswith("max-age=5,")
+    assert api.get("/api/env/space").headers["vercel-cdn-cache-control"] == "max-age=5"  # blocked: short, no SWR
+    assert api.get("/api/live/aircraft/7809aa/trail").status_code == 200
+    assert "vercel-cdn-cache-control" not in api.get("/api/live/aircraft/7809aa/trail").headers  # per-instance history
+    assert "vercel-cdn-cache-control" not in api.get("/api/sources?probe=false").headers
