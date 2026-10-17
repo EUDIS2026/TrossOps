@@ -193,7 +193,7 @@ await step('E2E-04', 'Sources panel lists every feed with a status from the voca
 await step('E2E-05', 'Searching and selecting an entity opens the Inspector', async () => {
   const target = await run(() => { const n = window.__session.world.get('fl-s-cor3'); return n ? { id: n.e.id, label: n.e.label } : null })
   expect(target, 'entity fl-s-cor3 missing from the world', {})
-  const search = page.locator('input[aria-label="Search"]')
+  const search = page.locator('.search input')
   await search.click(); await search.fill(target.id)
   const first = page.locator('.search-results [role="option"]').first()
   await first.waitFor({ state: 'visible', timeout: 5000 }).catch(() => { throw new Error(`no search results for ${target.id}`) })
