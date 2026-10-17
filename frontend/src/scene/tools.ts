@@ -120,7 +120,8 @@ const LAYERS = ['tools-fill', 'tools-casing', 'tools-line', 'tools-dash', 'tools
 const TOP = LAYERS[LAYERS.length - 1]
 const C = { measure: '#ffd95a', ok: '#4fd09a', blocked: '#f0545a', ring: '#4ea1ff', rubber: '#e6edf2' }
 type Feat = GeoJSON.Feature
-const line = (coords: LngLat[], color: string, extra: Record<string, unknown> = {}): Feat => ({ type: 'Feature', properties: { color, width: 2.5, ...extra }, geometry: { type: 'LineString', coordinates: coords } })
+const line = (coords: LngLat[], color: string, { dashed, ...extra }: Record<string, unknown> = {}): Feat =>
+  ({ type: 'Feature', properties: { color, width: 2.5, ...extra, ...(dashed ? { dashed: true } : {}) }, geometry: { type: 'LineString', coordinates: coords } })
 const point = (p: LngLat, props: Record<string, unknown>): Feat => ({ type: 'Feature', properties: props, geometry: { type: 'Point', coordinates: p } })
 const mid = (a: LngLat, b: LngLat): LngLat => { const gc = greatCircle(a, b, distanceM(a, b) / 2 + 1); return gc.length > 2 ? gc[1] : [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] }
 
@@ -154,7 +155,7 @@ export function toolFeatures(s: ToolsState): Feat[] {
       const k = cl.findIndex(c => c !== null && c <= 0)
       if (k < 0) f.push(line([a, b], C.ok, { width: 3 }))
       else { f.push(line([a, pts[k]], C.ok, { width: 3 })); f.push(line([pts[k], b], C.blocked, { width: 3 })) }
-      if (r.obstruction) f.push(point([r.obstruction.lng, r.obstruction.lat], { vertex: true, color: C.blocked, r: 6, label: `Masked by ground ${Math.round(r.obstruction.groundM)} m`, size: 11, anchor: 'top', roff: 1.1 }))
+      if (r.obstruction) f.push(point([r.obstruction.lng, r.obstruction.lat], { vertex: true, color: C.blocked, r: 6, label: `Masked: ground ${Math.round(r.obstruction.groundM)} m`, size: 11, anchor: 'left', roff: 0.9 }))
     } else if (a && b) f.push(line([a, b], C.rubber, { dashed: true, width: 1.5 }))
     else if (a && s.cursor) {
       f.push(line([a, s.cursor], C.rubber, { dashed: true, width: 1.5 }))

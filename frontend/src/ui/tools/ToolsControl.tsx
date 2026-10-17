@@ -160,9 +160,9 @@ function LosCard() {
       <HeightInput label="Observer height" value={l.ha} onChange={v => toolActions.setHeights(v, null)} />
       <HeightInput label="Target height" value={l.hb} onChange={v => toolActions.setHeights(null, v)} />
     </div>
-    <div className="chips tool-presets">
-      {OBS_PRESETS.map(p => <button key={p.label} className="chip" aria-pressed={l.ha === p.h} title={`Observer ${p.h} m above ground`} onClick={() => toolActions.setHeights(p.h, null)}>Obs {p.label}</button>)}
-      {TGT_PRESETS.map(p => <button key={p.label} className="chip" aria-pressed={l.hb === p.h} title={`Target ${p.h} m above ground`} onClick={() => toolActions.setHeights(null, p.h)}>Tgt {p.label}</button>)}
+    <div className="tool-presets-grid">
+      <small>Observer</small><div className="chips tool-presets">{OBS_PRESETS.map(p => <button key={p.label} className="chip" aria-pressed={l.ha === p.h} title={`Observer ${p.h} m above ground`} onClick={() => toolActions.setHeights(p.h, null)}>{p.label}</button>)}</div>
+      <small>Target</small><div className="chips tool-presets">{TGT_PRESETS.map(p => <button key={p.label} className="chip" aria-pressed={l.hb === p.h} title={`Target ${p.h} m above ground`} onClick={() => toolActions.setHeights(null, p.h)}>{p.label}</button>)}</div>
     </div>
     {l.a && l.b && <LosResult r={r} />}
     {l.a && <div className="tool-actions"><button className="btn small" onClick={() => toolActions.clear()}>Clear</button></div>}
