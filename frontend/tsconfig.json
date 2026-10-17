@@ -13,6 +13,7 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
+    "resolveJsonModule": true,
     "types": ["vite/client", "geojson"]
   },
   "include": ["src"]

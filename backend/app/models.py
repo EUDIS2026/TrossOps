@@ -10,7 +10,7 @@ SourceKind = Literal["observed", "simulated", "inferred", "predicted", "planned"
 AltitudeDatum = Literal["WGS84_ELLIPSOID", "MSL", "AGL", "UNKNOWN"]
 EntityKind = Literal[
     "fixed_wing", "helicopter", "multirotor", "ground_vehicle", "vessel",
-    "personnel", "facility", "infrastructure", "unknown",
+    "personnel", "facility", "infrastructure", "unknown", "formation",
 ]
 Domain = Literal["air", "land", "sea", "site", "infra", "unknown"]
 Affiliation = Literal["own", "allied", "civil", "unknown", "hostile_suspected"]
@@ -50,6 +50,9 @@ class GeoPosition(BaseModel):
 class Kinematics(BaseModel):
     headingDeg: float | None = None
     speedMps: float | None = None
+    pitchDeg: float = 0.0
+    bankDeg: float = 0.0
+    phase: str | None = None  # static | waiting | moving | holding | returning | done
     frame: Literal["ENU", "UNKNOWN"] = "ENU"
 
 
@@ -99,7 +102,16 @@ class SceneEntity(BaseModel):
     scenarioId: str = "sweden-synthetic"
     worldRevision: int = 1
     modelVersion: str = "1.0.0"
-    track: Track | None = None  # declared movement plan (planned provenance)
+    track: Track | None = None  # legacy declared movement plan (planned provenance)
+    sidc: str | None = None  # APP-6 / MIL-STD-2525C symbol identification code
+    echelon: str | None = None
+    parentId: str | None = None
+    layer: str | None = None  # dot-separated layer id, e.g. "land.manoeuvre"
+    platform: str | None = None  # public platform class
+    siteId: str | None = None
+    short: str | None = None
+    rangeKm: float | None = None
+    tags: list[str] = []
 
 
 class InputReport(BaseModel):
@@ -206,6 +218,9 @@ class PredictedPath(BaseModel):
     uncertaintyRing: list[list[float]] | None = None
     threatenedEntityIds: list[str] = []
     etaS: float | None = None
+    hypothesis: str = "constant velocity"
+    probability: float = 1.0
+    basedOn: list[str] = []
 
 
 class LayerDef(BaseModel):

@@ -1,189 +1,131 @@
-/** SceneController owns the MapLibre map, every scene source/layer, the render loop and camera intents.
- * React never re-renders per frame: the controller reads the store and the entity buffer directly. */
-import { Map as MlMap, LngLatBounds, NavigationControl, ScaleControl, setWorkerUrl, type GeoJSONSource, type LayerSpecification, type LngLatLike, type MapMouseEvent } from 'maplibre-gl'
+/** SceneController owns the MapLibre map, the frame loop, picking and camera intent. React never re-renders per
+ * frame: the controller reads the store, the session's clock and the world model directly. */
+import { Map as MlMap, LngLatBounds, NavigationControl, ScaleControl, setWorkerUrl, type MapMouseEvent } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
-// MapLibre 6 locates its worker relative to import.meta.url. Under Vite (dev and build) that URL points at the
-// pre-bundled dependency, where no worker file exists, so every GeoJSON/vector source silently fails to load.
-// Resolving the worker as an asset makes it correct in dev, in the production build and in the offline bundle.
+// MapLibre 6 locates its worker relative to import.meta.url; under Vite that points at the pre-bundled dependency,
+// so the worker is resolved as an asset instead (dev, build and offline bundle alike).
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 setWorkerUrl(maplibreWorkerUrl)
-import type { Feature, FeatureCollection, Point } from 'geojson'
-import type { AttentionResponse, Condition, SceneEntity, Snapshot } from '../contracts/types'
+import type { Condition, LiveAircraft, LiveVessel, SiteLayout, Snapshot } from '../contracts/types'
 import { api } from '../core/api'
-import { EntityBuffer } from '../core/entityBuffer'
-import { actions, currentMode, layerOn, store, type AppState, type Basemap } from '../core/store'
-import { ATTRIBUTION, TERRAIN_TILEJSON, VECTOR_TILES_URL, styleFor } from './basemap'
-import { ModelLayer, type ModelInstance } from './models3d'
-import { SpriteLayer, type SpriteInstance } from './sprites'
+import type { Session } from '../core/session'
+import { actions, analysisLayer, currentMode, layerOn, store, type AppState, type Basemap, type SelectionKind } from '../core/store'
+import { mercX, mercY, type WNode, type WorldModel } from '../core/world'
+import * as A from './analysis'
+import { ATTRIBUTION, TERRAIN_TILEJSON, styleFor } from './basemap'
+import { CinematicCamera } from './camera'
+import { ModelLayer, modelZoomFor, type ModelInstance } from './models3d'
+import { addOverlays, circleRing, DETAIL_LAYERS, empty, nightPolygon, OVERLAY_LAYERS, setData } from './overlays'
+import { SpriteLayer } from './sprites'
+import { halo, headingArrow, natoSymbol, palette, trafficIcon, vesselColor } from './symbols'
 
-const fmt = (v: number | null | undefined, unit: string) => (v == null ? '—' : `${Math.round(v)}${unit}`)
-import { drawCount, drawIcon, drawIncident, drawLabel, iconId, modelKeyFor, palette, parseIconId, SIZE } from './semantics'
+const ECHELON_PX: Record<string, number> = { service: 60, division: 58, brigade: 56, regiment: 54, battalion: 52, company: 48, platoon: 46 }
+const AFF_LABEL: Record<string, string> = { own: '#a6e6ff', allied: '#a6e6ff', civil: '#f2b8f2', unknown: '#ffff8c', hostile_suspected: '#ff9a9a' }
+const COND: Condition[] = ['normal', 'degraded', 'unknown', 'unavailable']
 
-type FC = FeatureCollection
-const empty = (): FC => ({ type: 'FeatureCollection', features: [] })
-const SEV_RANK: Record<Condition, number> = { normal: 0, degraded: 1, unknown: 2, unavailable: 3 }
-const MOBILE = new Set(['fixed_wing', 'helicopter', 'multirotor', 'ground_vehicle', 'vessel', 'personnel', 'unknown'])
+interface Drawn { kind: SelectionKind; id: string; lng: number; lat: number; alt: number | null; r: number }
 
-export const SPRITE_MIN_ZOOM = 8.3
-export const MODEL_MIN_ZOOM = 13
-export function iconScale(zoom: number): number { return zoom <= 4 ? 0.4 : zoom <= 8 ? 0.4 + ((zoom - 4) / 4) * 0.12 : zoom <= 12 ? 0.52 + ((zoom - 8) / 4) * 0.18 : zoom <= 16 ? 0.7 + ((zoom - 12) / 4) * 0.25 : 0.95 }
-
-export function attentionResolutionFor(zoom: number): AppState['attentionResolution'] {
-  return zoom < 5.6 ? 'national' : zoom < 8.6 ? 'regional' : 'local'
+function spriteFactory(key: string): HTMLCanvasElement {
+  const [kind, a, b] = key.split('|')
+  if (kind === 'ms') return natoSymbol(a, (b as Condition) || 'normal')
+  if (kind === 'arrow') return headingArrow(a || '#e9f1f7')
+  if (kind === 'halo') return halo(a === '1')
+  if (kind === 'ac') return trafficIcon(a === 'heli' ? 'heli' : 'air', a === 'mil' ? palette.liveMil : a === 'emg' ? palette.liveEmergency : palette.liveAir, a === 'heavy' ? 1.25 : 1)
+  if (kind === 'vs') return trafficIcon('sea', a, 0.9)
+  return natoSymbol('SUGP--------')
 }
 
 export class SceneController {
   readonly map: MlMap
-  readonly buffer = new EntityBuffer()
+  readonly sprites = new SpriteLayer('symbols', spriteFactory)
   readonly models = new ModelLayer()
-  readonly sprites = new SpriteLayer()
-  private lastSourceUpdate = 0
-  private lastPoses = new Map<string, { lng: number; lat: number }>()
+  readonly camera: CinematicCamera
   private raf = 0
   private styleReady = false
   private basemap: Basemap
-  private unsubscribe: () => void
   private prev: Partial<AppState> = {}
-  private entities = new Map<string, SceneEntity>()
-  private trails = new Map<string, number[][]>()
-  private trailTimer = 0
-  private attentionKey = ''
+  private unsubscribe: () => void
+  private drawn: Drawn[] = []
+  private lastLabels = 0
+  private lastAnalysis = 0
+  private analysisKey = ''
+  private contributions: Awaited<ReturnType<typeof api.attention>>['contributions'] = []
+  private grid: A.GridPoint[] = []
+  private layouts = new Map<string, SiteLayout | 'loading'>()
+  private layoutsDirty = false
+  private envAt: Record<string, number> = {}
+  private onLayers = new Set<string>()
   private disposed = false
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, private session: Session) {
     const s = store.get()
     this.basemap = s.basemap
     this.map = new MlMap({
       container, style: styleFor(s.basemap), center: [s.camera.lng, s.camera.lat], zoom: s.camera.zoom, pitch: s.camera.pitch, bearing: s.camera.bearing,
-      minZoom: 2.2, maxZoom: 19, attributionControl: { compact: true, customAttribution: ATTRIBUTION[s.basemap] }, maxPitch: 75, cancelPendingTileRequestsWhileZooming: false,
+      minZoom: 2.5, maxZoom: 19, maxPitch: 80, attributionControl: { compact: true, customAttribution: ATTRIBUTION[s.basemap] }, cancelPendingTileRequestsWhileZooming: false,
+      canvasContextAttributes: { antialias: true },
     })
-    this.map.setMissingStyleImageResolver(id => this.ensureImage(id))
-    Object.assign(window as unknown as Record<string, unknown>, { __map: this.map, __scene: this, __store: store }) // handles for browser verification scripts
-    this.map.on('style.load', () => { this.styleReady = true; this.ensureLayers(); this.applyAll(); store.set({ basemapStatus: this.basemap === 'offline' ? 'offline' : 'online' }) })
+    this.camera = new CinematicCamera(this.map)
+    Object.assign(window as unknown as Record<string, unknown>, { __map: this.map, __scene: this, __store: store, __session: session })
+    this.map.on('style.load', () => { this.styleReady = true; this.install(); store.set({ basemapStatus: this.basemap === 'offline' ? 'offline' : 'online' }) })
     this.map.on('error', e => {
       const msg = String((e as unknown as { error?: Error }).error?.message ?? '')
-      // Only a failure to fetch the style itself falls back to offline geography; a worker or tile error must not.
-      if (this.basemap !== 'offline' && !this.styleReady && !/worker/i.test(msg) && /style|Failed to fetch|NetworkError|load/i.test(msg)) {
-        actions.setBasemap('offline')
-      }
+      if (this.basemap !== 'offline' && !this.styleReady && !/worker/i.test(msg) && /style|Failed to fetch|NetworkError/i.test(msg)) actions.setBasemap('offline')
     })
     this.map.on('moveend', () => {
       const c = this.map.getCenter()
       store.set({ camera: { zoom: this.map.getZoom(), pitch: this.map.getPitch(), bearing: this.map.getBearing(), lng: c.lng, lat: c.lat } })
-      void this.refreshAttention()
+      void this.loadLayoutsInView()
     })
     this.map.on('click', e => this.onClick(e))
     this.map.on('mousemove', e => this.onHover(e))
-    this.map.on('dragstart', () => { if (store.get().follow) store.set({ follow: false }) })
+    this.map.on('mouseout', () => actions.hover(null))
+    for (const ev of ['dragstart', 'wheel', 'touchstart'] as const) this.map.on(ev, () => { this.camera.interrupt(); if (store.get().follow && ev === 'dragstart') store.set({ follow: false }) })
     this.map.addControl(new NavigationControl({ visualizePitch: true, showCompass: true }), 'bottom-right')
-    this.map.addControl(new ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left')
+    this.map.addControl(new ScaleControl({ maxWidth: 110, unit: 'metric' }), 'bottom-left')
     this.unsubscribe = store.subscribe(() => this.onStore())
+    session.onWorld = w => this.onWorld(w)
     this.raf = requestAnimationFrame(t => this.frame(t))
   }
 
-  dispose() {
-    this.disposed = true
-    cancelAnimationFrame(this.raf)
-    window.clearInterval(this.trailTimer)
-    this.unsubscribe()
-    this.map.remove()
+  dispose() { this.disposed = true; cancelAnimationFrame(this.raf); this.unsubscribe(); this.map.remove() }
+
+  // ---- installation -----------------------------------------------------------------------------------------
+  private install() {
+    addOverlays(this.map)
+    if (!this.map.getLayer(this.models.id)) this.map.addLayer(this.models)
+    if (!this.map.getLayer(this.sprites.id)) this.map.addLayer(this.sprites, 'labels')
+    this.prev = {}
+    this.onStore()
+    if (this.session.world) this.onWorld(this.session.world)
+    this.layoutsDirty = true
+    this.applyLayouts()
   }
 
-  // ---- images ---------------------------------------------------------------------------------
-  private ensureImage(id: string) {
-    if (this.map.hasImage(id)) return
-    const add = (img: ImageData) => this.map.addImage(id, img, { pixelRatio: 2 })
-    if (id.startsWith('ent:')) { const spec = parseIconId(id); if (spec) add(drawIcon(spec)); return }
-    if (id.startsWith('lbl:')) { add(drawLabel(id.slice(4))); return }
-    if (id.startsWith('lblu:')) { add(drawLabel(id.slice(5), { color: palette.unknown })); return }
-    if (id.startsWith('lblw:')) { add(drawLabel(id.slice(5), { color: '#9fd3ff', weight: 500 })); return }
-    if (id.startsWith('count:')) { add(drawCount(Number(id.slice(6)))); return }
-    if (id.startsWith('inc:')) { add(drawIncident(id.slice(4) as 'info')); return }
+  private onWorld(w: WorldModel) {
+    if (!this.styleReady) return
+    setData(this.map, 'cables', { type: 'FeatureCollection', features: w.catalog.cables.map(c => ({ type: 'Feature', properties: { id: c.id, label: c.label, kind: c.kind }, geometry: { type: 'LineString', coordinates: c.coords } })) })
+    setData(this.map, 'plans', { type: 'FeatureCollection', features: w.catalog.plans.map(p => ({ type: 'Feature', properties: { id: p.entityId, label: p.label }, geometry: { type: 'LineString', coordinates: p.path.map(v => [v[0], v[1]]) } })) })
   }
 
-  // ---- sources and layers -----------------------------------------------------------------------
-  private ensureLayers() {
-    const m = this.map
-    const geo = (id: string, extra: Record<string, unknown> = {}) => { if (!m.getSource(id)) m.addSource(id, { type: 'geojson', data: empty(), ...extra }) }
-    if (!m.getSource('counties-src')) m.addSource('counties-src', { type: 'geojson', data: '/data/sweden_counties.geojson' })
-    geo('attention-points'); geo('areas'); geo('attention'); geo('prediction-rings'); geo('predictions', { lineMetrics: true }); geo('plans'); geo('trails', { lineMetrics: true })
-    geo('interventions'); geo('incidents'); geo('weather')
-    geo('units', {
-      cluster: true, clusterMaxZoom: 8, clusterRadius: 46, promoteId: 'id',
-      clusterProperties: {
-        air: ['+', ['case', ['==', ['get', 'domain'], 'air'], 1, 0]], land: ['+', ['case', ['==', ['get', 'domain'], 'land'], 1, 0]],
-        sea: ['+', ['case', ['==', ['get', 'domain'], 'sea'], 1, 0]], sites: ['+', ['case', ['get', 'isSite'], 1, 0]], worst: ['max', ['get', 'sevRank']],
-      },
-    })
-    const add = (layer: LayerSpecification, before?: string) => { if (!m.getLayer(layer.id)) m.addLayer(layer, before && m.getLayer(before) ? before : undefined) }
-
-    add({ id: 'counties-line', type: 'line', source: 'counties-src', paint: { 'line-color': 'rgba(170,195,215,0.55)', 'line-width': 1 }, layout: { visibility: 'none' } })
-    add({ id: 'areas-fill', type: 'fill', source: 'areas', paint: { 'fill-color': ['match', ['get', 'status'], 'uncovered', 'rgba(229,72,77,0.16)', 'degraded', 'rgba(224,164,59,0.14)', 'covered', 'rgba(91,141,239,0.07)', 'rgba(160,180,200,0.05)'] } })
-    add({ id: 'areas-line', type: 'line', source: 'areas', paint: { 'line-color': ['match', ['get', 'status'], 'uncovered', palette.critical, 'degraded', palette.warning, 'covered', 'rgba(140,170,215,0.9)', 'rgba(160,180,200,0.6)'], 'line-width': ['match', ['get', 'kind'], 'coverage_model', 1, 1.6], 'line-dasharray': ['match', ['get', 'kind'], 'restricted_zone', ['literal', [2, 2]], 'coverage_model', ['literal', [1, 3]], ['literal', [1, 0]]] } })
-    add({ id: 'attention-fill', type: 'fill', source: 'attention', paint: { 'fill-color': ['interpolate', ['linear'], ['get', 'norm'], 0, 'rgba(255,150,70,0.0)', 1, 'rgba(255,100,50,0.1)'], 'fill-antialias': false } })
-    add({ id: 'attention-heat', type: 'heatmap', source: 'attention-points', paint: {
-      'heatmap-weight': ['get', 'w'],
-      'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 2, ['get', 'r2'], 6, ['get', 'r6'], 10, ['get', 'r10'], 14, ['get', 'r14']],
-      'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 2, 0.9, 10, 1.4],
-      'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'], 0, 'rgba(255,150,70,0)', 0.15, 'rgba(255,160,80,0.18)', 0.4, 'rgba(255,130,60,0.42)', 0.7, 'rgba(255,95,50,0.62)', 1, 'rgba(255,60,40,0.82)'],
-      'heatmap-opacity': 0.85 } })
-    add({ id: 'attention-3d', type: 'fill-extrusion', source: 'attention', layout: { visibility: 'none' }, paint: { 'fill-extrusion-color': ['interpolate', ['linear'], ['get', 'norm'], 0, '#f7a86b', 0.5, '#ff7f4d', 1, '#ff4a35'], 'fill-extrusion-height': ['get', 'height'], 'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.55, 'fill-extrusion-vertical-gradient': true } })
-    add({ id: 'prediction-rings', type: 'fill', source: 'prediction-rings', paint: { 'fill-color': 'rgba(227,139,199,0.12)', 'fill-outline-color': 'rgba(227,139,199,0.45)' } })
-    add({ id: 'predictions-line', type: 'line', source: 'predictions', paint: { 'line-color': palette.predicted, 'line-width': 2, 'line-dasharray': [3, 2.5], 'line-opacity': 0.9 } })
-    add({ id: 'plans-line', type: 'line', source: 'plans', paint: { 'line-color': palette.planned, 'line-width': 1.4, 'line-dasharray': [0.6, 2.2], 'line-opacity': 0.8 }, layout: { 'line-cap': 'round' } })
-    add({ id: 'trails-line', type: 'line', source: 'trails', paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.5, 12, 3], 'line-gradient': ['interpolate', ['linear'], ['line-progress'], 0, 'rgba(230,238,245,0)', 1, 'rgba(230,238,245,0.9)'] }, layout: { 'line-cap': 'round', 'line-join': 'round' } })
-    add({ id: 'interventions-line', type: 'line', source: 'interventions', paint: { 'line-color': ['case', ['get', 'committed'], palette.accent, 'rgba(91,141,239,0.75)'], 'line-width': ['case', ['get', 'committed'], 2.6, 1.6], 'line-dasharray': ['case', ['get', 'committed'], ['literal', [1, 0]], ['literal', [2, 2]]] } })
-    add({ id: 'incidents', type: 'symbol', source: 'incidents', layout: { 'icon-image': ['concat', 'inc:', ['get', 'severity']], 'icon-size': ['interpolate', ['linear'], ['zoom'], 4, 0.55, 10, 0.9], 'icon-allow-overlap': true, 'icon-ignore-placement': true, 'symbol-sort-key': ['get', 'rank'] } })
-    add({ id: 'incident-radius', type: 'line', source: 'incidents', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'line-color': ['match', ['get', 'severity'], 'critical', palette.critical, 'warning', palette.warning, palette.advisory], 'line-width': 1, 'line-dasharray': [2, 2], 'line-opacity': 0.7 } }, 'incidents')
-    add({ id: 'weather-points', type: 'circle', source: 'weather', paint: { 'circle-radius': 5, 'circle-color': '#79c6ff', 'circle-stroke-color': '#0e1419', 'circle-stroke-width': 1.5 }, layout: { visibility: 'none' } })
-    add({ id: 'weather-labels', type: 'symbol', source: 'weather', layout: { 'icon-image': ['get', 'labelIcon'], 'icon-anchor': 'bottom', 'icon-offset': [0, -8], 'icon-allow-overlap': false, visibility: 'none' } })
-    add({ id: 'clusters', type: 'circle', source: 'units', filter: ['has', 'point_count'], paint: {
-      'circle-radius': ['interpolate', ['linear'], ['get', 'point_count'], 2, 15, 10, 20, 40, 28],
-      'circle-color': ['match', ['get', 'worst'], 3, 'rgba(229,72,77,0.82)', 2, 'rgba(227,139,199,0.82)', 1, 'rgba(224,164,59,0.84)', 'rgba(52,66,84,0.9)'],
-      'circle-stroke-color': 'rgba(230,238,245,0.9)', 'circle-stroke-width': 1.5 } })
-    add({ id: 'cluster-count', type: 'symbol', source: 'units', filter: ['has', 'point_count'], layout: { 'icon-image': ['concat', 'count:', ['get', 'point_count']], 'icon-allow-overlap': true, 'icon-ignore-placement': true } })
-    add({ id: 'unit-halo', type: 'circle', source: 'units', filter: ['all', ['!', ['has', 'point_count']], ['any', ['get', 'selected'], ['get', 'hovered']]], paint: {
-      'circle-radius': ['case', ['get', 'selected'], ['interpolate', ['linear'], ['zoom'], 5, 16, 12, 26], 14], 'circle-color': ['case', ['get', 'selected'], 'rgba(91,141,239,0.22)', 'rgba(230,238,245,0.12)'],
-      'circle-stroke-color': ['case', ['get', 'selected'], palette.accent, 'rgba(230,238,245,0.6)'], 'circle-stroke-width': ['case', ['get', 'selected'], 2, 1],
-      'circle-opacity': ['interpolate', ['linear'], ['zoom'], 8.2, 1, 8.4, ['case', ['get', 'isSite'], 1, 0]], 'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 8.2, 1, 8.4, ['case', ['get', 'isSite'], 1, 0]] } })
-    if (!m.getLayer(this.sprites.id)) m.addLayer(this.sprites)
-    if (!m.getLayer(this.models.id)) m.addLayer(this.models)
-    add({ id: 'unit-icons', type: 'symbol', source: 'units', filter: ['!', ['has', 'point_count']], layout: {
-      'icon-image': ['get', 'icon'], 'icon-rotate': ['get', 'heading'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'icon-ignore-placement': true,
-      'icon-size': ['interpolate', ['linear'], ['zoom'], 4, 0.4, 8, 0.52, 12, 0.7, 16, 0.95], 'symbol-sort-key': ['-', 10, ['get', 'priority']] },
-      paint: { 'icon-opacity': ['interpolate', ['linear'], ['zoom'], 8.2, ['case', ['get', 'stale'], 0.45, 1], 8.4, ['case', ['get', 'isSite'], 1, 0]] } })
-    add({ id: 'labels-important', type: 'symbol', source: 'units', minzoom: 5.5, filter: ['all', ['!', ['has', 'point_count']], ['get', 'important']], layout: {
-      'icon-image': ['get', 'labelIcon'], 'icon-anchor': 'top', 'icon-offset': [0, 20], 'icon-allow-overlap': false, 'icon-optional': true, 'symbol-sort-key': ['-', 10, ['get', 'priority']] } })
-    add({ id: 'labels-all', type: 'symbol', source: 'units', minzoom: 8.5, filter: ['all', ['!', ['has', 'point_count']], ['!', ['get', 'important']]], layout: {
-      'icon-image': ['get', 'labelIcon'], 'icon-anchor': 'top', 'icon-offset': [0, 20], 'icon-allow-overlap': false, 'icon-optional': true } })
-    if (this.basemap === 'operational') {
-      if (!m.getSource('ofm')) m.addSource('ofm', { type: 'vector', url: VECTOR_TILES_URL })
-      add({ id: 'buildings-3d', type: 'fill-extrusion', source: 'ofm', 'source-layer': 'building', minzoom: 14, layout: { visibility: 'none' }, filter: ['!=', ['get', 'hide_3d'], true], paint: {
-        'fill-extrusion-color': '#3a4653', 'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 0], 'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0], 'fill-extrusion-opacity': 0.8 } }, 'areas-fill')
-    }
-    window.clearInterval(this.trailTimer)
-    this.trailTimer = window.setInterval(() => void this.refreshTrails(), 20_000)
-  }
-
-  // ---- store reactions --------------------------------------------------------------------------
+  // ---- store reactions ----------------------------------------------------------------------------------------
   private onStore() {
     if (this.disposed) return
     const s = store.get()
-    const p = this.prev
     if (s.basemap !== this.basemap) { this.switchBasemap(s.basemap); return }
     if (!this.styleReady) return
-    if (s.snapshot !== p.snapshot) { this.applySnapshot(s.snapshot); void this.refreshAttention(true); void this.refreshTrails() }
-    if (s.attention !== p.attention) this.applyAttention(s.attention)
+    const p = this.prev
+    this.prev = s // before reacting: reactions may update the store, which re-enters here
     if (s.views !== p.views || s.roleId !== p.roleId || s.modeId !== p.modeId || s.layerOverrides !== p.layerOverrides || s.threeD !== p.threeD) this.applyLayers(s)
-    if (s.modeId !== p.modeId || s.roleId !== p.roleId) { const mode = currentMode(s); if (mode && p.modeId !== undefined) this.flyTo(mode.camera) }
-    if (s.threeD !== p.threeD) this.apply3d(s)
+    const modeChanged = (s.modeId !== p.modeId || s.roleId !== p.roleId) && p.modeId !== undefined
+    if (s.threeD !== p.threeD) this.apply3d(s, modeChanged)
+    if (modeChanged) { const mode = currentMode(s); if (mode) this.camera.fly({ ...mode.camera, pitch: s.threeD ? Math.max(mode.camera.pitch, 50) : mode.camera.pitch }, s.reducedMotion) }
     if (s.terrain !== p.terrain) this.applyTerrain(s)
-    if (s.selected !== p.selected) { this.applySelection(s); void this.refreshTrails() }
-    if (s.time !== p.time && s.time.mode === 'replay') this.renderStatic()
-    this.prev = s
+    if (s.snapshot !== p.snapshot && s.snapshot) this.applySnapshot(s.snapshot)
+    if (s.selected !== p.selected) this.applySelection(s)
+    if (s.route !== p.route) this.applyRoute(s)
+    if (s.live !== p.live && layerOn(s, 'analysis.gnss')) this.analysisKey = ''
   }
-
-  private applyAll() { const s = store.get(); this.prev = {}; this.onStore(); this.applyLayers(s); this.apply3d(s); this.applyTerrain(s); this.applySnapshot(s.snapshot); this.applyAttention(s.attention) }
 
   private switchBasemap(next: Basemap) {
     this.basemap = next
@@ -194,303 +136,517 @@ export class SceneController {
     if (ctrl?.options) { ctrl.options.customAttribution = ATTRIBUTION[next]; ctrl._updateAttributions?.() }
   }
 
-  private setVisible(layerId: string, on: boolean) { if (this.map.getLayer(layerId)) this.map.setLayoutProperty(layerId, 'visibility', on ? 'visible' : 'none') }
+  private vis(id: string, on: boolean) { if (this.map.getLayer(id)) this.map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none') }
 
   private applyLayers(s: AppState) {
-    const on = (id: string) => layerOn(s, id)
-    const units = on('units_air') || on('units_land') || on('units_sea') || on('sites') || on('infrastructure') || on('unknown_tracks')
-    for (const id of ['clusters', 'cluster-count', 'unit-halo', 'unit-icons']) this.setVisible(id, units)
-    this.setVisible('labels-important', units && on('labels')); this.setVisible('labels-all', units && on('labels'))
-    this.setVisible('areas-fill', on('areas')); this.setVisible('areas-line', on('areas'))
-    this.setVisible('attention-fill', on('attention') && !s.threeD); this.setVisible('attention-heat', on('attention') && !s.threeD); this.setVisible('attention-3d', on('attention') && s.threeD)
-    this.setVisible('prediction-rings', on('predictions')); this.setVisible('predictions-line', on('predictions'))
-    this.setVisible('plans-line', on('plans')); this.setVisible('trails-line', on('trails'))
-    this.setVisible('interventions-line', on('interventions')); this.setVisible('incidents', on('incidents')); this.setVisible('incident-radius', on('incidents'))
-    this.setVisible('counties-line', on('counties')); this.setVisible('weather-points', on('weather')); this.setVisible('weather-labels', on('weather'))
-    if (on('weather')) void this.refreshWeather()
-    // Domain filters are applied to the unit features themselves (see buildUnitFeatures), so clusters count only visible domains.
-    this.renderStatic()
+    this.onLayers = new Set((s.views?.layers ?? []).filter(l => layerOn(s, l.id)).map(l => l.id))
+    for (const [layer, ids] of Object.entries(OVERLAY_LAYERS)) for (const id of ids) this.vis(id, this.onLayers.has(layer))
+    for (const [layer, ids] of Object.entries(DETAIL_LAYERS)) {
+      for (const id of ids) {
+        const on = this.onLayers.has(layer)
+        if (this.map.getLayer(`${id}-flat`)) { this.vis(id, on && s.threeD); this.vis(`${id}-flat`, on && !s.threeD) } else this.vis(id, on)
+      }
+    }
+    this.vis('site-logistics-bund', this.onLayers.has('detail.logistics'))
+    const an = analysisLayer(s)
+    this.vis('analysis-fill', !!an && !s.threeD); this.vis('analysis-3d', !!an && s.threeD)
+    if (!an) { setData(this.map, 'analysis', empty()); store.set({ analysisInfo: null }) }
+    this.analysisKey = ''
+    if (this.onLayers.has('env.radar')) void this.ensureRadar(); else if (this.map.getLayer('radar')) this.vis('radar', false)
+    this.envAt = {}
+    void this.refreshEnvironment()
   }
 
-  private apply3d(s: AppState) {
+  private apply3d(s: AppState, cameraBusy = false) {
     this.models.enabled = s.threeD
-    this.setVisible('buildings-3d', s.threeD && this.basemap === 'operational')
-    this.sprites.maxZoom = s.threeD ? MODEL_MIN_ZOOM : 99
     const pitch = this.map.getPitch()
-    if (s.threeD && pitch < 30) this.map.easeTo({ pitch: 58, duration: s.reducedMotion ? 0 : 700 })
-    if (!s.threeD && pitch > 0) this.map.easeTo({ pitch: 0, duration: s.reducedMotion ? 0 : 500 })
-    this.map.triggerRepaint()
+    if (!cameraBusy && !this.map.isMoving()) {
+      if (s.threeD && pitch < 35) this.map.easeTo({ pitch: 58, duration: s.reducedMotion ? 0 : 900 })
+      if (!s.threeD && pitch > 0) this.map.easeTo({ pitch: 0, duration: s.reducedMotion ? 0 : 600 })
+    }
+    this.applyLayers(s)
   }
 
   private applyTerrain(s: AppState) {
     if (s.terrain && this.basemap !== 'offline') {
       if (!this.map.getSource('dem')) this.map.addSource('dem', { type: 'raster-dem', url: TERRAIN_TILEJSON })
-      this.map.setTerrain({ source: 'dem', exaggeration: 1.15 })
-      if (!this.map.getLayer('hillshade')) this.map.addLayer({ id: 'hillshade', type: 'hillshade', source: 'dem', paint: { 'hillshade-exaggeration': 0.22, 'hillshade-shadow-color': '#0a1218', 'hillshade-highlight-color': '#cfdbe3' } }, 'areas-fill')
+      this.map.setTerrain({ source: 'dem', exaggeration: 1.2 })
+      if (!this.map.getLayer('hillshade')) this.map.addLayer({ id: 'hillshade', type: 'hillshade', source: 'dem', paint: { 'hillshade-exaggeration': 0.35, 'hillshade-shadow-color': '#05080b', 'hillshade-highlight-color': '#3a4652', 'hillshade-accent-color': '#0d1318' } }, this.map.getLayer('road-minor') ? 'road-minor' : 'night')
+      if (!this.map.getLayer('sky')) this.map.setSky({ 'sky-color': '#0b1520', 'horizon-color': '#1a2836', 'fog-color': '#0d151d', 'fog-ground-blend': 0.6, 'horizon-fog-blend': 0.6, 'sky-horizon-blend': 0.7, 'atmosphere-blend': 0.5 })
     } else {
       if (this.map.getTerrain()) this.map.setTerrain(null)
       if (this.map.getLayer('hillshade')) this.map.removeLayer('hillshade')
     }
   }
 
-  private applySelection(s: AppState) {
-    this.renderStatic()
-    if (s.selected?.kind === 'entity') {
-      const e = this.entities.get(s.selected.id)
-      const pose = s.time.mode === 'live' ? this.buffer.poseAt(s.selected.id, this.buffer.renderTime()) : null
-      const lng = pose?.lng ?? e?.position?.longitudeDeg, lat = pose?.lat ?? e?.position?.latitudeDeg
-      if (lng !== undefined && lat !== undefined) this.map.flyTo({ center: [lng, lat], zoom: Math.max(this.map.getZoom(), 8.5), duration: s.reducedMotion ? 0 : 900, essential: true })
-    } else if (s.selected?.kind === 'input') {
-      const inp = s.snapshot?.inputs.find(i => i.id === s.selected!.id)
-      if (inp?.position) this.map.flyTo({ center: [inp.position.longitudeDeg, inp.position.latitudeDeg], zoom: Math.max(this.map.getZoom(), 7.5), duration: s.reducedMotion ? 0 : 900 })
-    } else if (s.selected?.kind === 'alert') {
-      const a = s.snapshot?.alerts.find(a => a.id === s.selected!.id)
-      if (a?.position) this.map.flyTo({ center: a.position as LngLatLike, zoom: Math.max(this.map.getZoom(), 6.5), duration: s.reducedMotion ? 0 : 900 })
-    } else if (s.selected?.kind === 'area') {
-      const area = s.snapshot?.areas.find(a => a.id === s.selected!.id)
-      if (area) { const b = new LngLatBounds(); area.ring.forEach(p => b.extend(p as [number, number])); this.map.fitBounds(b, { padding: 120, duration: s.reducedMotion ? 0 : 900 }) }
-    }
-  }
-
-  flyTo(cam: { lng: number; lat: number; zoom: number; pitch: number; bearing: number }) {
-    const s = store.get()
-    this.map.flyTo({ center: [cam.lng, cam.lat], zoom: cam.zoom, pitch: s.threeD ? Math.max(cam.pitch, 55) : cam.pitch, bearing: cam.bearing, duration: s.reducedMotion ? 0 : 1300, essential: true })
-  }
-
-  resetOverview() { const mode = currentMode(store.get()); if (mode) this.flyTo(mode.camera) }
-
-  // ---- data application --------------------------------------------------------------------------
-  private applySnapshot(snap: Snapshot | null) {
-    this.entities.clear()
-    if (!snap) return
-    for (const e of snap.entities) this.entities.set(e.id, e)
-    this.buffer.speed = snap.speed
-    const src = (id: string) => this.map.getSource(id) as GeoJSONSource | undefined
-    src('areas')?.setData({ type: 'FeatureCollection', features: snap.areas.map(a => ({ type: 'Feature', id: a.id, properties: { id: a.id, label: a.label, kind: a.kind, status: a.status }, geometry: { type: 'Polygon', coordinates: [a.ring] } })) })
-    src('predictions')?.setData({ type: 'FeatureCollection', features: snap.predictions.map(p => ({ type: 'Feature', properties: { id: p.entityId }, geometry: { type: 'LineString', coordinates: p.points.map(q => [q[0], q[1]]) } })) })
-    src('prediction-rings')?.setData({ type: 'FeatureCollection', features: snap.predictions.filter(p => p.uncertaintyRing).map(p => ({ type: 'Feature', properties: { id: p.entityId }, geometry: { type: 'Polygon', coordinates: [p.uncertaintyRing!] } })) })
-    src('plans')?.setData({ type: 'FeatureCollection', features: snap.entities.filter(e => e.track && e.affiliation !== 'unknown').map(e => ({ type: 'Feature', properties: { id: e.id }, geometry: { type: 'LineString', coordinates: e.track!.waypoints.map(w => [w[0], w[1]]) } })) })
-    const sevRank = { info: 0, advisory: 1, warning: 2, critical: 3 }
-    const incidents: Feature[] = []
-    for (const i of snap.inputs) {
-      if (!i.position) continue
-      incidents.push({ type: 'Feature', properties: { id: i.id, severity: i.severity, channel: i.channel, title: i.title, rank: 4 - sevRank[i.severity] }, geometry: { type: 'Point', coordinates: [i.position.longitudeDeg, i.position.latitudeDeg] } })
-      if (i.radiusM && i.radiusM >= 2000) incidents.push({ type: 'Feature', properties: { id: i.id, severity: i.severity }, geometry: { type: 'Polygon', coordinates: [circle([i.position.longitudeDeg, i.position.latitudeDeg], i.radiusM)] } })
-    }
-    src('incidents')?.setData({ type: 'FeatureCollection', features: incidents })
-    const lines: Feature[] = []
-    for (const iv of snap.interventions) {
-      const opt = iv.options.find(o => o.id === (iv.committedOptionId ?? iv.recommendedOptionId))
-      const unit = opt?.assignedEntityIds[0] ? this.entities.get(opt.assignedEntityIds[0]) : null
-      if (!iv.position || !unit?.position) continue
-      lines.push({ type: 'Feature', properties: { id: iv.id, committed: !!iv.committedOptionId }, geometry: { type: 'LineString', coordinates: [[unit.position.longitudeDeg, unit.position.latitudeDeg], iv.position] } })
-    }
-    src('interventions')?.setData({ type: 'FeatureCollection', features: lines })
-    this.renderStatic()
-  }
-
-  private applyAttention(att: AttentionResponse | null) {
-    const src = this.map.getSource('attention') as GeoJSONSource | undefined
-    const pts = this.map.getSource('attention-points') as GeoJSONSource | undefined
-    if (!src || !pts) return
-    if (!att || !att.cells.length) { src.setData(empty()); pts.setData(empty()); return }
-    const maxW = Math.max(...att.contributions.map(c => c.weight), 0.01)
-    const rpx = (radiusM: number, lat: number, z: number) => Math.min(420, Math.max(6, radiusM / ((156543.03392 * Math.cos((lat * Math.PI) / 180)) / 2 ** z)))
-    pts.setData({ type: 'FeatureCollection', features: att.contributions.map(c => ({ type: 'Feature', properties: { w: c.weight / maxW, reason: c.reason, r2: rpx(c.radiusM, c.lat, 2), r6: rpx(c.radiusM, c.lat, 6), r10: rpx(c.radiusM, c.lat, 10), r14: rpx(c.radiusM, c.lat, 14) }, geometry: { type: 'Point', coordinates: [c.lng, c.lat] } })) })
-    const max = att.maxScore || 1
-    const scale = { national: 55_000, regional: 16_000, local: 3_500 }[att.resolution as 'national'] ?? 16_000
-    src.setData({ type: 'FeatureCollection', features: att.cells.map(c => ({ type: 'Feature', properties: { key: c.key, score: c.score, norm: c.score / max, height: (c.score / max) * scale, reasons: c.reasons.join(' · ') }, geometry: { type: 'Polygon', coordinates: [c.ring] } })) })
-  }
-
-  async refreshAttention(force = false) {
-    const s = store.get()
-    if (!s.snapshot) return
-    const res = attentionResolutionFor(this.map.getZoom())
-    const key = `${res}:${s.snapshot.worldRevision}:${s.time.mode === 'replay' ? s.time.atS : 'live'}:${s.roleId}`
-    if (!force && key === this.attentionKey) return
-    this.attentionKey = key
-    try {
-      const att = await api.attention(s.time.mode === 'replay' ? s.time.atS : null, res, s.roleId)
-      if (this.attentionKey === key) store.set({ attention: att, attentionResolution: res })
-    } catch { /* keep the previous surface; the status strip reports stream state */ }
-  }
-
-  private weatherAt = 0
-  /** SMHI point forecasts for the public reference cities, fetched through the API (10 min cache there, 5 min here).
-   * Forecasts are shown as labels only; they never become observations in the rule engine. */
-  async refreshWeather() {
-    if (Date.now() - this.weatherAt < 300_000) return
-    this.weatherAt = Date.now()
-    try {
-      const { points } = await api.points()
-      const ids = Object.keys(points)
-      const forecasts = await Promise.all(ids.map(id => api.forecast(id).catch(() => null)))
-      const features: Feature[] = []
-      let connected = 0
-      ids.forEach((id, i) => {
-        const f = forecasts[i], p = points[id]
-        if (!f) return
-        const d = f.data ?? {}
-        const text = f.status === 'connected'
-          ? `${p.label}  ${fmt(d.air_temperature, '°')}  ${fmt(d.wind_speed, ' m/s')}${d.wind_speed_of_gust != null ? ` (${Math.round(d.wind_speed_of_gust)})` : ''}  ${fmt(d.visibility_in_air, ' km vis')}`
-          : `${p.label}  forecast unavailable`
-        if (f.status === 'connected') connected++
-        features.push({ type: 'Feature', properties: { id, kind: 'forecast', label: p.label, status: f.status, labelIcon: `lblw:${text}`, validTime: f.validTime ?? '', source: f.source }, geometry: { type: 'Point', coordinates: p.point } })
-      })
-      ;(this.map.getSource('weather') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features })
-      store.set({ weatherStatus: connected ? 'connected' : 'unavailable' })
-    } catch { store.set({ weatherStatus: 'unavailable' }) }
-  }
-
-  async refreshTrails() {
-    const s = store.get()
-    if (!layerOn(s, 'trails') || !s.snapshot) { this.trails.clear(); this.renderTrails(); return }
-    const ids = new Set<string>()
-    if (s.selected?.kind === 'entity' && MOBILE.has(this.entities.get(s.selected.id)?.kind ?? '')) ids.add(s.selected.id)
-    for (const e of this.entities.values()) if (e.affiliation === 'unknown') ids.add(e.id)
-    if (s.trailsForAll) for (const e of this.entities.values()) if (MOBILE.has(e.kind)) ids.add(e.id)
-    const to = s.time.mode === 'replay' ? s.time.atS : s.snapshot.nowS
-    const results = await Promise.allSettled([...ids].map(async id => [id, (await api.tracks(id, Math.max(0, to - 1200), to, 20)).samples] as const))
-    this.trails.clear()
-    for (const r of results) if (r.status === 'fulfilled') this.trails.set(r.value[0], r.value[1].map(sm => [sm[0]!, sm[1]!]))
-    this.renderTrails()
-  }
-
-  private renderTrails() {
-    const src = this.map.getSource('trails') as GeoJSONSource | undefined
-    src?.setData({ type: 'FeatureCollection', features: [...this.trails.entries()].filter(([, pts]) => pts.length > 1).map(([id, pts]) => ({ type: 'Feature', properties: { id }, geometry: { type: 'LineString', coordinates: pts } })) })
-  }
-
-  // ---- per-frame rendering -------------------------------------------------------------------------
-  private buildUnitFeatures(poseOf: (e: SceneEntity) => { lng: number; lat: number; heading: number; condition: Condition; stale: boolean; alt: number | null } | null): { fc: FC; instances: ModelInstance[]; sprites: SpriteInstance[] } {
-    const s = store.get()
-    const sel = s.selected?.kind === 'entity' ? s.selected.id : null
-    const features: Feature[] = []
-    const instances: ModelInstance[] = []
-    const sprites: SpriteInstance[] = []
-    const sizePx = SIZE * iconScale(this.map.getZoom())
-    this.lastPoses.clear()
-    const show = { air: layerOn(s, 'units_air'), land: layerOn(s, 'units_land'), sea: layerOn(s, 'units_sea'), site: layerOn(s, 'sites'), infra: layerOn(s, 'infrastructure'), unknown: layerOn(s, 'unknown_tracks') }
-    for (const e of this.entities.values()) {
-      if (!show[e.domain]) continue
-      const pose = poseOf(e)
-      if (!pose) continue
-      const isSite = !MOBILE.has(e.kind)
-      const modelKey = modelKeyFor(e.kind, e.modelKey)
-      const condition = pose.condition
-      const important = isSite || e.affiliation === 'unknown' || e.id === sel || condition !== 'normal'
-      features.push({ type: 'Feature', id: e.id, properties: {
-        id: e.id, icon: iconId({ modelKey, affiliation: e.affiliation, condition }), heading: isSite ? 0 : pose.heading, label: e.label,
-        labelIcon: `${e.affiliation === 'unknown' ? 'lblu' : 'lbl'}:${e.label}`, condition, domain: e.domain, affiliation: e.affiliation, kind: e.kind,
-        priority: e.visualPriority + (e.id === sel ? 5 : 0), sevRank: Math.max(SEV_RANK[condition], e.affiliation === 'unknown' ? 2 : 0), isSite, important,
-        selected: e.id === sel, hovered: e.id === s.hovered, stale: pose.stale || e.stale },
-        geometry: { type: 'Point', coordinates: [pose.lng, pose.lat] } })
-      if (!isSite) {
-        instances.push({ id: e.id, lng: pose.lng, lat: pose.lat, altM: pose.alt, headingDeg: pose.heading, modelKey, affiliation: e.affiliation, condition, selected: e.id === sel })
-        sprites.push({ id: e.id, lng: pose.lng, lat: pose.lat, headingDeg: pose.heading, icon: iconId({ modelKey, affiliation: e.affiliation, condition }), opacity: pose.stale || e.stale ? 0.45 : 1, selected: e.id === sel, hovered: e.id === s.hovered, sizePx })
-        this.lastPoses.set(e.id, { lng: pose.lng, lat: pose.lat })
+  // ---- data application ------------------------------------------------------------------------------------------
+  private applySnapshot(snap: Snapshot) {
+    const m = this.map
+    setData(m, 'areas', { type: 'FeatureCollection', features: snap.areas.map(a => ({ type: 'Feature', properties: { id: a.id, label: a.label, kind: a.kind, status: a.status ?? 'n/a' }, geometry: { type: 'Polygon', coordinates: [a.ring] } })) })
+    setData(m, 'predictions', { type: 'FeatureCollection', features: snap.predictions.map(p => ({ type: 'Feature', properties: { id: p.entityId, p: p.probability, label: `${p.hypothesis} · ${Math.round(p.probability * 100)} %` },
+      geometry: { type: 'LineString', coordinates: p.points.map(q => [q[0], q[1]]) } })) })
+    setData(m, 'prediction-rings', { type: 'FeatureCollection', features: snap.predictions.filter(p => p.uncertaintyRing).map(p => ({ type: 'Feature', properties: { id: p.entityId }, geometry: { type: 'Polygon', coordinates: [p.uncertaintyRing!] } })) })
+    const rank = { info: 3, advisory: 2, warning: 1, critical: 0 }
+    setData(m, 'reports', { type: 'FeatureCollection', features: snap.inputs.filter(i => i.position && i.channel !== 'police_event').map(i => ({ type: 'Feature', properties: { id: i.id, severity: i.severity, title: i.title, rank: rank[i.severity] },
+      geometry: { type: 'Point', coordinates: [i.position!.longitudeDeg, i.position!.latitudeDeg] } })) })
+    const w = this.session.world
+    if (w) {
+      const lines: GeoJSON.Feature[] = []
+      for (const iv of snap.interventions) {
+        const opt = iv.options.find(o => o.id === (iv.committedOptionId ?? iv.recommendedOptionId))
+        const unit = opt?.assignedEntityIds[0] ? w.get(opt.assignedEntityIds[0]) : undefined
+        if (!iv.position || !unit) continue
+        const pose = w.poseNow(unit)
+        lines.push({ type: 'Feature', properties: { id: iv.id, committed: !!iv.committedOptionId }, geometry: { type: 'LineString', coordinates: [[pose.lng, pose.lat], iv.position] } })
       }
+      setData(m, 'interventions', { type: 'FeatureCollection', features: lines })
     }
-    return { fc: { type: 'FeatureCollection', features }, instances, sprites }
+    this.analysisKey = ''
+    if (analysisLayer(store.get()) === 'analysis.fusion') void this.refreshContributions()
   }
 
-  /** Static render (replay, or before the first tick): positions from the snapshot itself. */
-  private renderStatic() {
-    if (!this.styleReady) return
-    const s = store.get()
-    if (s.time.mode === 'live' && this.buffer.lastTickWall) return // the frame loop owns live rendering
-    const { fc, instances, sprites } = this.buildUnitFeatures(e => e.position ? { lng: e.position.longitudeDeg, lat: e.position.latitudeDeg, heading: e.kinematics?.headingDeg ?? 0, condition: e.condition, stale: e.stale, alt: e.position.altitudeM } : null)
-    ;(this.map.getSource('units') as GeoJSONSource | undefined)?.setData(fc)
-    this.models.instances = instances
-    this.sprites.instances = sprites
-    this.map.triggerRepaint()
+  private async refreshContributions() {
+    try {
+      const s = store.get()
+      const att = await api.attention(this.session.clock.mode === 'sim' ? Math.round(this.session.clock.now()) : null, 'regional', s.roleId)
+      this.contributions = att.contributions; this.analysisKey = ''
+    } catch { /* keep */ }
   }
 
+  private applyRoute(s: AppState) {
+    const r = s.route
+    this.map.getCanvas().style.cursor = r?.picking ? 'crosshair' : ''
+    if (!r?.result) { setData(this.map, 'route-preview', empty()); return }
+    setData(this.map, 'route-preview', { type: 'FeatureCollection', features: r.result.options.map(o => ({ type: 'Feature', properties: { id: o.id, selected: o.id === r.option }, geometry: { type: 'LineString', coordinates: o.path.map(v => [v[0], v[1]]) } })) })
+    const b = new LngLatBounds()
+    for (const o of r.result.options) for (const v of o.path) b.extend([v[0], v[1]])
+    if (!b.isEmpty()) this.map.fitBounds(b, { padding: { top: 120, bottom: 160, left: 120, right: 460 }, duration: s.reducedMotion ? 0 : 1400, pitch: s.threeD ? 45 : 0 })
+  }
+
+  // ---- environment (real public feeds) ------------------------------------------------------------------------
+  private due(key: string, ms: number) { const now = performance.now(); if (now - (this.envAt[key] ?? -1e12) < ms) return false; this.envAt[key] = now; return true }
+
+  private async refreshEnvironment() {
+    const on = this.onLayers
+    const m = this.map
+    try {
+      if (on.has('civil.police_events') && this.due('police', 300_000)) {
+        const r = await api.police()
+        setData(m, 'police', { type: 'FeatureCollection', features: (r.items ?? []).filter(e => e.lng != null).map(e => {
+          const kw = (e.keywords as string[] | undefined) ?? []
+          const jit = ((Number(String(e.id).slice(-3)) || 0) % 360) * Math.PI / 180 // county centroids stack: spread markers a little
+          return { type: 'Feature', properties: { id: String(e.id), name: e.name, type: e.type, alert: kw.length > 0 },
+            geometry: { type: 'Point', coordinates: [(e.lng as number) + 0.06 * Math.cos(jit), (e.lat as number) + 0.03 * Math.sin(jit)] } }
+        }) })
+      }
+      if (on.has('env.warnings') && this.due('warnings', 300_000)) {
+        const r = await api.warnings()
+        setData(m, 'warnings', { type: 'FeatureCollection', features: (r.items ?? []).filter(w => w.geometry).map(w => ({ type: 'Feature', properties: { id: String(w.id), level: w.level, event: w.event, area: w.areaName }, geometry: w.geometry as GeoJSON.Geometry })) })
+      }
+      if (on.has('env.obs') && this.due('obs', 600_000)) {
+        const r = await api.observations()
+        const st = ((r as unknown as { stations?: Record<string, unknown>[] }).stations ?? r.items ?? []) as Record<string, number | string | null>[]
+        setData(m, 'stations', { type: 'FeatureCollection', features: st.filter(x => x.lng != null).map(x => ({ type: 'Feature', properties: { id: String(x.id), name: x.name,
+          text: [x.airTempC != null ? `${Math.round(Number(x.airTempC))}°` : '', x.windMps != null ? `${Math.round(Number(x.windMps))} m/s` : '', x.visibilityM != null && Number(x.visibilityM) < 10000 ? `vis ${(Number(x.visibilityM) / 1000).toFixed(1)} km` : ''].filter(Boolean).join(' · ') },
+          geometry: { type: 'Point', coordinates: [Number(x.lng), Number(x.lat)] } })) })
+      }
+      if ((on.has('env.wind') || on.has('analysis.weather')) && this.due('grid', 900_000)) {
+        const r = await api.grid()
+        this.grid = (r.points ?? []) as unknown as A.GridPoint[]
+        setData(m, 'wind', { type: 'FeatureCollection', features: (r.points ?? []).filter(p => p.windDirDeg != null).map(p => ({ type: 'Feature', properties: { dir: p.windDirDeg, speed: p.windMps }, geometry: { type: 'Point', coordinates: [p.lng as number, p.lat as number] } })) })
+        this.analysisKey = ''
+      }
+      if (on.has('env.daylight') && this.due('night', 60_000)) setData(m, 'night', nightPolygon(new Date()))
+    } catch { /* feeds report their own status in Sources */ }
+  }
+
+  private async ensureRadar() {
+    try {
+      const r = await api.radar()
+      const frame = r.frames?.[r.frames.length - 1]
+      if (!frame) return
+      const url = frame.tileUrl
+      const src = this.map.getSource('radar') as unknown as { tiles?: string[]; setTiles?: (t: string[]) => void } | undefined
+      if (src?.setTiles) src.setTiles([url])
+      else {
+        this.map.addSource('radar', { type: 'raster', tiles: [url], tileSize: 256, maxzoom: r.maxZoom ?? 7, attribution: 'Radar: RainViewer' })
+        this.map.addLayer({ id: 'radar', type: 'raster', source: 'radar', paint: { 'raster-opacity': 0.62, 'raster-fade-duration': 0 } }, 'analysis-fill')
+      }
+      this.vis('radar', true)
+    } catch { /* status in Sources */ }
+  }
+
+  // ---- site detail --------------------------------------------------------------------------------------------
+  private async loadLayoutsInView() {
+    const w = this.session.world
+    if (!w || this.map.getZoom() < 10.8) return
+    const b = this.map.getBounds()
+    const want = w.catalog.sites.filter(si => b.contains([si.center[0], si.center[1]]) || this.layouts.has(si.id)).filter(si => !this.layouts.has(si.id)).slice(0, 6)
+    await Promise.all(want.map(async si => {
+      this.layouts.set(si.id, 'loading')
+      try { this.layouts.set(si.id, await api.layout(si.id)); this.layoutsDirty = true } catch { this.layouts.delete(si.id) }
+    }))
+    this.applyLayouts()
+  }
+
+  private applyLayouts() {
+    if (!this.layoutsDirty || !this.styleReady) return
+    this.layoutsDirty = false
+    const feats: GeoJSON.Feature[] = []
+    for (const l of this.layouts.values()) if (l !== 'loading') feats.push(...l.features.features)
+    setData(this.map, 'site-detail', { type: 'FeatureCollection', features: feats })
+    this.models.setProps(feats)
+  }
+
+  // ---- selection and camera -------------------------------------------------------------------------------------
+  private applySelection(s: AppState) {
+    const sel = s.selected
+    const w = this.session.world
+    setData(this.map, 'ranges', empty())
+    setData(this.map, 'trails', empty())
+    if (!sel || !w) return
+    const rm = s.reducedMotion
+    if (sel.kind === 'entity' || sel.kind === 'track') {
+      const n = w.get(sel.id)
+      if (!n) return
+      const p = w.poseNow(n)
+      const air = n.e.domain === 'air' || (n.pose.alt ?? 0) > 200
+      this.camera.focusPoint(p.lng, p.lat, air ? Math.max(this.map.getZoom(), 10.5) : n.e.domain === 'sea' ? 12.8 : 14.2, s.threeD ? (air ? 62 : 58) : this.map.getPitch(), rm, air && s.threeD ? p.alt ?? 0 : 0)
+      if (n.e.rangeKm && n.e.kind !== 'formation' && (n.e.capabilities.includes('air_defence') || n.e.layer === 'infra.sensors')) {
+        setData(this.map, 'ranges', { type: 'FeatureCollection', features: [{ type: 'Feature', properties: { color: n.e.capabilities.includes('air_defence') ? '#48c8a0' : '#6ab4ff' }, geometry: { type: 'LineString', coordinates: circleRing(p.lng, p.lat, n.e.rangeKm * 1000) } }] })
+      }
+    } else if (sel.kind === 'formation') {
+      const n = w.get(sel.id)
+      if (!n) return
+      const leaves = w.leavesOf(n)
+      const b = new LngLatBounds()
+      for (const l of leaves) { const p = w.poseNow(l); b.extend([p.lng, p.lat]) }
+      if (!b.isEmpty()) this.camera.focusBounds(b, s.threeD ? 50 : this.map.getPitch(), rm)
+    } else if (sel.kind === 'site') {
+      const site = w.catalog.sites.find(x => x.id === sel.id)
+      const n = w.get(sel.id)
+      const c = site?.center ?? (n ? [n.pose.lng, n.pose.lat] : null)
+      if (!c) return
+      if (!s.threeD) store.set({ threeD: true, terrain: true })
+      const zoom = site?.kind === 'airbase' ? 14.3 : site?.kind === 'navbase' ? 15.2 : 15.4
+      this.camera.cinematicSite(c[0], c[1], zoom, (site?.axis ?? 0) - 35, rm)
+      void this.loadLayoutsInView()
+    } else if (sel.kind === 'aircraft' || sel.kind === 'vessel') {
+      const it = sel.data as LiveAircraft | LiveVessel | undefined
+      if (it) this.camera.focusPoint(it.lng, it.lat, Math.max(this.map.getZoom(), sel.kind === 'aircraft' ? 9 : 11.5), this.map.getPitch(), rm, 0)
+    } else if (sel.kind === 'input' || sel.kind === 'alert' || sel.kind === 'police' || sel.kind === 'warning') {
+      const snap = s.snapshot
+      const pos = sel.kind === 'input' ? snap?.inputs.find(i => i.id === sel.id)?.position : null
+      const a = sel.kind === 'alert' ? snap?.alerts.find(x => x.id === sel.id)?.position : null
+      const ll = pos ? [pos.longitudeDeg, pos.latitudeDeg] : a ?? (sel.data as { lng?: number; lat?: number } | undefined)?.lng !== undefined ? [(sel.data as { lng: number }).lng, (sel.data as { lat: number }).lat] : null
+      if (ll) this.camera.focusPoint(ll[0], ll[1], Math.max(this.map.getZoom(), 7.5), this.map.getPitch(), rm, 0)
+    } else if (sel.kind === 'area') {
+      const area = s.snapshot?.areas.find(a => a.id === sel.id)
+      if (area) { const b = new LngLatBounds(); area.ring.forEach(p => b.extend(p as [number, number])); this.camera.focusBounds(b, this.map.getPitch(), rm) }
+    }
+  }
+
+  flyToMode() { const mode = currentMode(store.get()); if (mode) this.camera.fly(mode.camera, store.get().reducedMotion) }
+
+  // ---- frame loop ---------------------------------------------------------------------------------------------
   private frame(now: number) {
     if (this.disposed) return
     this.raf = requestAnimationFrame(t => this.frame(t))
+    const w = this.session.world
+    if (!this.styleReady || !w) return
     const s = store.get()
-    if (!this.styleReady || s.time.mode !== 'live' || !this.buffer.lastTickWall) return
-    const t = this.buffer.renderTime()
-    const { fc, instances, sprites } = this.buildUnitFeatures(e => {
-      if (!MOBILE.has(e.kind)) return e.position ? { lng: e.position.longitudeDeg, lat: e.position.latitudeDeg, heading: 0, condition: e.condition, stale: false, alt: e.position.altitudeM } : null
-      const p = this.buffer.poseAt(e.id, t)
-      if (!p) return e.position ? { lng: e.position.longitudeDeg, lat: e.position.latitudeDeg, heading: e.kinematics?.headingDeg ?? 0, condition: e.condition, stale: true, alt: e.position.altitudeM } : null
-      return { lng: p.lng, lat: p.lat, heading: p.heading, condition: p.condition === 'unknown' ? e.condition : p.condition, stale: p.stale, alt: p.alt }
-    })
-    // The symbol source re-tiles on every setData, so it is refreshed at 2 Hz (labels, clusters, picking fallback);
-    // the sprite and model layers take the display-rate poses directly.
-    if (now - this.lastSourceUpdate > 500) { this.lastSourceUpdate = now; (this.map.getSource('units') as GeoJSONSource | undefined)?.setData(fc) }
-    this.models.instances = instances
-    this.sprites.instances = sprites
-    if (s.follow && s.selected?.kind === 'entity') {
-      const p = this.buffer.poseAt(s.selected.id, t)
-      if (p && !this.map.isMoving()) {
-        // In 3D the camera orbits the unit at its reported altitude, so an aircraft stays centred instead of the ground below it.
-        if (s.threeD && p.alt !== null && p.alt > 0) { this.map.setCenterClampedToGround(false); this.map.setCenterElevation(p.alt) }
-        else if (!this.map.getCenterClampedToGround()) { this.map.setCenterClampedToGround(true) }
-        this.map.jumpTo({ center: [p.lng, p.lat] })
+    const t = this.session.clock.now()
+    const live = this.session.clock.mode === 'live'
+    const scope = s.snapshot?.scope ? new Set(s.snapshot.scope) : null
+    const on = this.onLayers
+    w.update(t, n => {
+      const layer = n.e.affiliation === 'unknown' ? 'track.unknown' : n.e.layer ?? ''
+      return on.has(layer) && (!scope || scope.has(n.e.id))
+    }, this.session.buffer, live ? this.session.buffer.renderTime() : t)
+    const zoom = this.map.getZoom()
+    const worldPx = 512 * 2 ** zoom
+    const b = this.map.getBounds()
+    const view = { minx: mercX(b.getWest()), maxx: mercX(b.getEast()), miny: mercY(b.getNorth()), maxy: mercY(b.getSouth()) }
+    const sel = s.selected
+    const pin = new Set<string>()
+    if (sel && (sel.kind === 'entity' || sel.kind === 'track')) { const n = w.get(sel.id); if (n) for (const a of w.chain(n)) pin.add(a.e.id) }
+    const items = this.declutter(w.cut(worldPx, view, pin, Math.round(Math.min(900, 70 * 1.55 ** Math.max(0, zoom - 4.5)))), zoom, now)
+    const c = this.map.getCenter()
+    const cx = mercX(c.lng), cy = mercY(c.lat)
+    const bearing = this.map.getBearing()
+    const zs = Math.max(0.78, Math.min(1.15, 0.8 + (zoom - 5) * 0.035))
+    const models3d = s.threeD
+    const modelInstances: ModelInstance[] = []
+    this.sprites.begin(cx, cy)
+    const drawn: Drawn[] = []
+    const hovered = s.hovered?.id
+    for (const it of items) {
+      const n = it.node
+      const e = n.e
+      const isSite = e.kind === 'facility' || e.kind === 'infrastructure'
+      const leafModel = models3d && !it.aggregate && !isSite && !!e.model && zoom >= modelZoomFor(e.model)
+      const cond = it.aggregate ? COND[n.worst] ?? 'normal' : (n.status?.[0] ?? 'normal')
+      const size = (it.aggregate ? ECHELON_PX[e.echelon ?? 'company'] ?? 48 : isSite ? 52 : 46) * zs * (isSite && zoom > 13.5 ? 0.7 : 1)
+      const mx = mercX(it.lng), my = mercY(it.lat)
+      const alt = !it.aggregate && n.pose.alt && n.pose.alt > 0 ? n.pose.alt : null
+      const selected = sel?.id === e.id
+      if (selected || hovered === e.id) this.sprites.push(mx, my, alt, it.lat, `halo|${selected ? 1 : 0}`, size * 1.25, 0, 1)
+      if (leafModel) {
+        modelInstances.push({ id: e.id, lng: it.lng, lat: it.lat, alt: n.pose.alt, heading: n.pose.heading, pitch: n.pose.pitch, bank: n.pose.bank, model: e.model!, affiliation: e.affiliation, condition: cond, selected, speed: n.pose.speed })
+      } else {
+        this.sprites.push(mx, my, alt, it.lat, `ms|${e.sidc ?? 'SUGP--------'}|${cond}`, size, 0, n.status?.[5] ? 0.55 : 1)
+        if (!it.aggregate && n.pose.speed > 0.5) this.sprites.push(mx, my, alt, it.lat, `arrow|${e.affiliation === 'unknown' ? '#ffff8c' : e.affiliation === 'civil' ? '#f2b8f2' : '#d8f4ff'}`, size, n.pose.heading - bearing, 0.95)
       }
-    } else if (!this.map.getCenterClampedToGround()) this.map.setCenterClampedToGround(true)
-    if (this.map.getZoom() >= SPRITE_MIN_ZOOM) this.map.triggerRepaint()
+      drawn.push({ kind: e.kind === 'formation' ? 'formation' : isSite ? 'site' : e.affiliation === 'unknown' ? 'track' : 'entity', id: e.id, lng: it.lng, lat: it.lat, alt, r: size * 0.36 })
+    }
+    // real public traffic (dead-reckoned from the last fetch)
+    if (live) {
+      const dt = Math.min(60, (performance.now() - s.live.at) / 1000)
+      const showAir = on.has('live.air'), showMil = on.has('live.air_mil')
+      if (showAir || showMil) for (const a of s.live.aircraft) {
+        if (!showAir && !a.military) continue
+        const [lng, lat] = dr(a.lng, a.lat, a.headingDeg, a.onGround ? 0 : a.speedMps, dt)
+        const cls = a.emergency || ['7500', '7600', '7700'].includes(a.squawk ?? '') ? 'emg' : a.military ? 'mil' : a.category === 'A7' ? 'heli' : a.category === 'A5' || a.category === 'A4' ? 'heavy' : 'civil'
+        const sz = (a.military ? 46 : 38) * zs
+        const mx = mercX(lng), my = mercY(lat)
+        if (mx < view.minx - 0.01 || mx > view.maxx + 0.01 || my < view.miny - 0.01 || my > view.maxy + 0.01) continue
+        if (sel?.id === a.id || hovered === a.id) this.sprites.push(mx, my, a.altM, lat, `halo|${sel?.id === a.id ? 1 : 0}`, sz * 1.3, 0, 1)
+        if (models3d && !a.onGround && zoom >= 9.5) modelInstances.push({ id: a.id, lng, lat, alt: a.altM, heading: a.headingDeg ?? 0, pitch: 0, bank: 0, model: a.category === 'A5' ? 'widebody' : a.category === 'A1' ? 'ga_prop' : a.category === 'A7' ? 'heli_light' : 'airliner', affiliation: 'civil', condition: 'normal', selected: sel?.id === a.id, speed: a.speedMps ?? 0 })
+        else this.sprites.push(mx, my, a.altM, lat, `ac|${cls}`, sz, (a.headingDeg ?? 0) - bearing, a.seenS != null && a.seenS > 30 ? 0.5 : 0.95)
+        drawn.push({ kind: 'aircraft', id: a.id, lng, lat, alt: a.altM, r: sz * 0.3 })
+      }
+      if (on.has('live.sea')) for (const v of s.live.vessels) {
+        const [lng, lat] = dr(v.lng, v.lat, v.courseDeg, v.speedMps, dt)
+        const mx = mercX(lng), my = mercY(lat)
+        if (mx < view.minx - 0.01 || mx > view.maxx + 0.01 || my < view.miny - 0.01 || my > view.maxy + 0.01) continue
+        const sz = 34 * zs
+        if (sel?.id === String(v.id) || hovered === String(v.id)) this.sprites.push(mx, my, null, lat, `halo|${sel?.id === String(v.id) ? 1 : 0}`, sz * 1.3, 0, 1)
+        if (models3d && zoom >= 11.5) modelInstances.push({ id: String(v.id), lng, lat, alt: null, heading: v.headingDeg ?? v.courseDeg ?? 0, pitch: 0, bank: 0, model: vesselModel(v.shipType), affiliation: 'civil', condition: 'normal', selected: sel?.id === String(v.id), speed: v.speedMps ?? 0 })
+        else this.sprites.push(mx, my, null, lat, `vs|${vesselColor(v.shipType)}`, sz, (v.headingDeg ?? v.courseDeg ?? 0) - bearing, (v.speedMps ?? 0) > 0.3 ? 0.95 : 0.6)
+        drawn.push({ kind: 'vessel', id: String(v.id), lng, lat, alt: null, r: sz * 0.3 })
+      }
+    }
+    this.sprites.commit()
+    this.models.setInstances(modelInstances, zoom)
+    this.drawn = drawn
+    if (now - this.lastLabels > 250) { this.lastLabels = now; this.updateLabels(items, s, zoom) }
+    if (now - this.lastAnalysis > 1500) { this.lastAnalysis = now; this.updateAnalysis(s, w, zoom); void this.refreshEnvironment(); this.updateTrail(s, w, t) }
+    this.followCamera(s, w)
   }
 
-  /** Screen-space hit test against the live poses of moving units (exact, independent of tile state). */
-  private hitTestUnit(x: number, y: number, radiusPx = 18): string | null {
-    let best: string | null = null, bestD = radiusPx * radiusPx
-    for (const [id, p] of this.lastPoses) {
-      const pt = this.map.project([p.lng, p.lat])
-      const d = (pt.x - x) ** 2 + (pt.y - y) ** 2
-      if (d < bestD) { bestD = d; best = id }
+  /** Screen-space declutter for aggregates and sites below street zoom: a symbol that would overlap one already
+   * placed is nudged outward on rings of candidate offsets and tied to its true position with a leader line.
+   * Placements are remembered per id so symbols do not hop between frames; moving platforms are never displaced. */
+  private placed = new Map<string, [number, number]>()
+  private leaders: number[][][] = []
+  private declutter(items: ReturnType<WorldModel['cut']>, zoom: number, now: number) {
+    if (zoom >= 11.5) { if (this.leaders.length && now - this.lastLabels > 250) { this.leaders = []; setData(this.map, 'leaders', empty()) } return items }
+    const R = 30
+    const occupied: [number, number][] = []
+    const order = items.map((it, i) => ({ it, i, pri: it.aggregate ? 1000 + it.count : it.node.e.kind === 'facility' || it.node.e.kind === 'infrastructure' ? 500 : it.node.pose.speed > 0.5 ? 2000 : 100 }))
+      .sort((a, b) => b.pri - a.pri || (a.it.node.e.id < b.it.node.e.id ? -1 : 1))
+    const leaders: number[][][] = []
+    const free = (x: number, y: number) => occupied.every(([ox, oy]) => (ox - x) ** 2 + (oy - y) ** 2 >= R * R)
+    for (const o of order) {
+      const it = o.it
+      const p = this.map.project([it.lng, it.lat])
+      const movable = it.aggregate || it.node.e.kind === 'facility' || it.node.e.kind === 'infrastructure'
+      let x = p.x, y = p.y
+      if (movable && !free(x, y)) {
+        const prev = this.placed.get(it.node.e.id)
+        let found = false
+        if (prev && free(p.x + prev[0], p.y + prev[1])) { x = p.x + prev[0]; y = p.y + prev[1]; found = true }
+        for (let ring = 1; ring <= 3 && !found; ring++) for (let k = 0; k < 8 && !found; k++) {
+          const a = (k / 8) * Math.PI * 2 + ring * 0.4, dx = Math.cos(a) * R * 1.15 * ring, dy = Math.sin(a) * R * 1.15 * ring
+          if (free(p.x + dx, p.y + dy)) { x = p.x + dx; y = p.y + dy; found = true }
+        }
+        if (found) {
+          this.placed.set(it.node.e.id, [x - p.x, y - p.y])
+          const ll = this.map.unproject([x, y])
+          leaders.push([[it.lng, it.lat], [ll.lng, ll.lat]])
+          it.lng = ll.lng; it.lat = ll.lat
+        }
+      } else if (movable) this.placed.delete(it.node.e.id)
+      occupied.push([x, y])
+    }
+    if (now - this.lastLabels > 250) { this.leaders = leaders; setData(this.map, 'leaders', { type: 'FeatureCollection', features: leaders.map(c => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: c } })) }) }
+    return items
+  }
+
+  private updateLabels(items: ReturnType<WorldModel['cut']>, s: AppState, zoom: number) {
+    if (!this.onLayers.has('picture.labels')) return
+    const feats: GeoJSON.Feature[] = []
+    for (const it of items) {
+      const e = it.node.e
+      const isSite = e.kind === 'facility' || e.kind === 'infrastructure'
+      if (!it.aggregate && !isSite && zoom < 9 && s.selected?.id !== e.id && e.affiliation !== 'unknown') continue
+      const text = it.aggregate ? `${e.short ?? e.label} · ${it.count}` : isSite ? e.label : zoom >= 12 ? e.label : (e.short ?? e.label)
+      feats.push({ type: 'Feature', properties: { text, agg: it.aggregate, rank: it.aggregate ? 0 : isSite ? 1 : 2, color: AFF_LABEL[e.affiliation] ?? '#dfe6ec' }, geometry: { type: 'Point', coordinates: [it.lng, it.lat] } })
+    }
+    if (zoom >= 8) for (const a of s.live.aircraft) if (a.military || zoom >= 9) {
+      if (!this.onLayers.has('live.air') && !(a.military && this.onLayers.has('live.air_mil'))) continue
+      feats.push({ type: 'Feature', properties: { text: `${a.callsign ?? a.id}${a.altM ? ` FL${Math.round(a.altM / 30.48)}` : ''}`, agg: false, rank: 3, color: a.military ? palette.liveMil : '#9ec7e0' }, geometry: { type: 'Point', coordinates: [a.lng, a.lat] } })
+    }
+    if (zoom >= 10.5 && this.onLayers.has('live.sea')) for (const v of s.live.vessels) if (v.name) feats.push({ type: 'Feature', properties: { text: v.name, agg: false, rank: 4, color: '#9fe0cc' }, geometry: { type: 'Point', coordinates: [v.lng, v.lat] } })
+    setData(this.map, 'labels', { type: 'FeatureCollection', features: feats })
+  }
+
+  private updateAnalysis(s: AppState, w: WorldModel, zoom: number) {
+    const an = analysisLayer(s)
+    if (!an) return
+    const res = A.resForZoom(zoom)
+    const surface = an.split('.')[1] as A.Surface
+    const dynamic = surface === 'threat' || surface === 'response' || surface === 'coverage'
+    const key = `${surface}:${res}:${dynamic ? Math.floor(performance.now() / 5000) : ''}`
+    if (key === this.analysisKey) return
+    this.analysisKey = key
+    if (surface === 'fusion' && !this.contributions.length) void this.refreshContributions()
+    if ((surface === 'weather') && !this.grid.length) { this.envAt.grid = 0; void this.refreshEnvironment() }
+    const r = surface === 'fusion' ? A.fusion(this.contributions, Math.max(4, Math.min(res, 6))) : surface === 'threat' ? A.threat(w, res) : surface === 'coverage' ? A.coverage(w, Math.min(res, 5))
+      : surface === 'response' ? A.response(w, Math.min(res, 4)) : surface === 'weather' ? A.weather(this.grid, Math.min(res, 4)) : A.gnss(s.live.aircraft, res)
+    this.lastSurface = r
+    setData(this.map, 'analysis', A.toGeoJSON(r))
+    store.set({ analysisInfo: { surface: r.surface, unit: r.unit, legend: r.legend, note: r.note, cells: r.cells.length } })
+  }
+  lastSurface: A.SurfaceResult | null = null
+
+  private trailKey = ''
+  private updateTrail(s: AppState, w: WorldModel, t: number) {
+    const sel = s.selected
+    if (!sel || sel.kind !== 'entity' || !this.onLayers.has('picture.trails')) { if (this.trailKey) { this.trailKey = ''; setData(this.map, 'trails', empty()) } return }
+    const n = w.get(sel.id)
+    if (!n?.motion) return
+    this.trailKey = sel.id
+    const coords: number[][] = []
+    const pose = { ...n.pose }
+    for (let k = 40; k >= 0; k--) { const tt = t - k * 30; if (tt >= 0) coords.push(this.samplePose(n, tt)) }
+    Object.assign(n.pose, pose)
+    setData(this.map, 'trails', { type: 'FeatureCollection', features: coords.length > 1 ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } }] : [] })
+  }
+  private samplePose(n: WNode, t: number): number[] {
+    const saved = n.visible
+    n.visible = false
+    const w = this.session.world!
+    const prevT = w.t
+    w.t = t
+    const p = w.poseNow(n)
+    const out = [p.lng, p.lat]
+    w.t = prevT
+    n.visible = saved
+    return out
+  }
+
+  private followCamera(s: AppState, w: WorldModel) {
+    if (!s.follow || !s.selected || this.map.isMoving()) { if (!s.follow && !this.map.getCenterClampedToGround()) this.map.setCenterClampedToGround(true); return }
+    let lng: number | undefined, lat: number | undefined, alt = 0, heading: number | null = null
+    if (s.selected.kind === 'entity' || s.selected.kind === 'track') {
+      const n = w.get(s.selected.id)
+      if (!n) return
+      lng = n.pose.lng; lat = n.pose.lat; alt = n.pose.alt ?? 0; heading = n.pose.speed > 0.5 ? n.pose.heading : null
+    } else if (s.selected.kind === 'aircraft') {
+      const a = s.live.aircraft.find(x => x.id === s.selected!.id)
+      if (a) { [lng, lat] = dr(a.lng, a.lat, a.headingDeg, a.speedMps, Math.min(60, (performance.now() - s.live.at) / 1000)); alt = a.altM ?? 0; heading = a.headingDeg }
+    }
+    if (lng === undefined || lat === undefined) return
+    if (s.threeD && alt > 0) { this.map.setCenterClampedToGround(false); this.map.setCenterElevation(alt) }
+    else if (!this.map.getCenterClampedToGround()) this.map.setCenterClampedToGround(true)
+    const opts: { center: [number, number]; bearing?: number } = { center: [lng, lat] }
+    if (s.threeD && s.cinematic && heading !== null) { const cur = this.map.getBearing(); const d = ((heading - cur + 540) % 360) - 180; opts.bearing = cur + d * 0.04 }
+    this.map.jumpTo(opts)
+  }
+
+  // ---- interaction --------------------------------------------------------------------------------------------
+  private pick(x: number, y: number): Drawn | null {
+    let best: Drawn | null = null, bestD = Infinity
+    for (const d of this.drawn) {
+      const p = this.map.project([d.lng, d.lat])
+      const dd = (p.x - x) ** 2 + (p.y - y) ** 2
+      const r = Math.max(14, d.r)
+      if (dd < r * r && dd < bestD) { bestD = dd; best = d }
     }
     return best
   }
 
-  // ---- interaction ---------------------------------------------------------------------------------
-  private pickable() { return ['unit-icons', 'unit-halo', 'clusters', 'incidents', 'attention-fill', 'attention-3d', 'areas-fill'].filter(id => this.map.getLayer(id)) }
-
-  private onClick(e: MapMouseEvent, retry = true) {
-    if (this.map.getZoom() >= SPRITE_MIN_ZOOM) {
-      const hit = this.hitTestUnit(e.point.x, e.point.y)
-      if (hit) { actions.select('entity', hit); return }
-    }
-    const feats = this.map.queryRenderedFeatures(e.point, { layers: this.pickable() })
-    if (!feats.length) {
-      // The symbol source may be mid-reload (it is refreshed at 2 Hz); one short retry before treating it as empty map.
-      if (retry) { window.setTimeout(() => this.onClick(e, false), 160); return }
-      actions.deselect(); return
-    }
-    const unit = feats.find(f => f.layer.id === 'unit-icons' || f.layer.id === 'unit-halo')
-    if (unit) { actions.select('entity', String(unit.properties.id)); return }
-    const cluster = feats.find(f => f.layer.id === 'clusters')
-    if (cluster) {
-      const src = this.map.getSource('units') as GeoJSONSource
-      void src.getClusterExpansionZoom(cluster.properties.cluster_id as number).then(zoom => {
-        const geom = cluster.geometry as Point
-        this.map.easeTo({ center: geom.coordinates as [number, number], zoom: Math.min(zoom + 0.3, 14), duration: store.get().reducedMotion ? 0 : 700 })
-      })
+  private onClick(e: MapMouseEvent) {
+    const s = store.get()
+    if (s.route?.picking) { void this.session.planRoute(s.route.entityId, [e.lngLat.lng, e.lngLat.lat]); return }
+    const hit = this.pick(e.point.x, e.point.y)
+    if (hit) {
+      const data = hit.kind === 'aircraft' ? s.live.aircraft.find(a => a.id === hit.id) : hit.kind === 'vessel' ? s.live.vessels.find(v => String(v.id) === hit.id) : undefined
+      if (hit.kind === 'formation' && this.session.world) {
+        actions.select('formation', hit.id)
+        return
+      }
+      actions.select(hit.kind, hit.id, data)
       return
     }
-    const inc = feats.find(f => f.layer.id === 'incidents')
-    if (inc) { actions.select('input', String(inc.properties.id)); return }
-    const cell = feats.find(f => f.layer.id === 'attention-fill' || f.layer.id === 'attention-3d')
-    if (cell) { actions.select('cell', String(cell.properties.key)); return }
-    const area = feats.find(f => f.layer.id === 'areas-fill')
-    if (area) { actions.select('area', String(area.properties.id)); return }
+    const layers = ['police', 'reports', 'warnings-fill', 'analysis-fill', 'analysis-3d', 'cables-line', 'areas-fill', 'site-buildings-flat', 'site-buildings', 'site-logistics-flat', 'site-logistics', 'site-footprint'].filter(id => this.map.getLayer(id) && this.map.getLayoutProperty(id, 'visibility') !== 'none')
+    const f = this.map.queryRenderedFeatures([[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]], { layers })[0]
+    if (!f) { if (!s.route) actions.deselect(); return }
+    const lid = f.layer.id, p = f.properties as Record<string, unknown>
+    if (lid === 'police') actions.select('police', String(p.id), { lng: e.lngLat.lng, lat: e.lngLat.lat })
+    else if (lid === 'reports') actions.select('input', String(p.id))
+    else if (lid === 'warnings-fill') actions.select('warning', String(p.id), p)
+    else if (lid.startsWith('analysis')) { const cell = this.lastSurface?.cells.find(c => c.h === p.h); actions.select('cell', String(p.h), { cell, surface: this.lastSurface?.surface, unit: this.lastSurface?.unit, note: this.lastSurface?.note }) }
+    else if (lid === 'cables-line') actions.select('cable', String(p.id), p)
+    else if (lid === 'areas-fill') actions.select('area', String(p.id))
+    else if (lid.startsWith('site-')) actions.select('site', String(p.siteId), { feature: p })
   }
 
+  private hoverRaf = 0
   private onHover(e: MapMouseEvent) {
-    const feats = this.map.queryRenderedFeatures(e.point, { layers: this.pickable() })
-    const unit = feats.find(f => f.layer.id === 'unit-icons')
-    const id = (this.map.getZoom() >= SPRITE_MIN_ZOOM ? this.hitTestUnit(e.point.x, e.point.y) : null) ?? (unit ? String(unit.properties.id) : null)
-    this.map.getCanvas().style.cursor = feats.length || id ? 'pointer' : ''
-    if (id !== store.get().hovered) store.set({ hovered: id })
+    if (this.hoverRaf) return
+    this.hoverRaf = requestAnimationFrame(() => {
+      this.hoverRaf = 0
+      const s = store.get()
+      if (s.route?.picking) return
+      const hit = this.pick(e.point.x, e.point.y)
+      this.map.getCanvas().style.cursor = hit ? 'pointer' : ''
+      if (!hit) { if (s.hovered) actions.hover(null); return }
+      if (s.hovered?.id === hit.id) return
+      actions.hover({ kind: hit.kind, id: hit.id, x: e.point.x, y: e.point.y, ...this.describe(hit, s) })
+    })
+  }
+
+  private describe(hit: Drawn, s: AppState): { title: string; lines: string[] } {
+    const w = this.session.world
+    if (hit.kind === 'aircraft') {
+      const a = s.live.aircraft.find(x => x.id === hit.id)
+      return { title: a?.callsign ?? hit.id, lines: [`${a?.type ?? 'aircraft'} ${a?.registration ?? ''}${a?.military ? ' · military-flagged' : ''}`, `${a?.altM != null ? `${Math.round(a.altM)} m` : '—'} · ${a?.speedMps != null ? `${Math.round(a.speedMps * 1.944)} kt` : '—'} · ${a?.squawk ?? '----'}`, 'Live ADS-B (real)'] }
+    }
+    if (hit.kind === 'vessel') {
+      const v = s.live.vessels.find(x => String(x.id) === hit.id)
+      return { title: v?.name ?? `MMSI ${hit.id}`, lines: [`${v?.shipTypeLabel ?? 'vessel'} · ${v?.navStatusLabel ?? ''}`, `${v?.speedMps != null ? `${(v.speedMps * 1.944).toFixed(1)} kn` : '—'}${v?.destination ? ` → ${v.destination}` : ''}`, 'Live AIS (real)'] }
+    }
+    const n = w?.get(hit.id)
+    if (!n) return { title: hit.id, lines: [] }
+    const e = n.e
+    if (e.kind === 'formation') {
+      return { title: e.label, lines: [`${n.count} platforms${n.moving ? ` · ${n.moving} moving` : ''}`, `${e.echelon ?? ''} · ${e.layer ?? ''}`] }
+    }
+    const st = n.status
+    const lines = [e.platform ?? e.kind.replace('_', ' ')]
+    if (n.pose.speed > 0.5) lines.push(`${Math.round(n.pose.speed * 3.6)} km/h · hdg ${Math.round(n.pose.heading)}°${n.pose.alt ? ` · ${Math.round(n.pose.alt)} m` : ''}`)
+    if (st) lines.push(`${st[0]} · readiness ${st[1] != null ? Math.round(st[1] * 100) : '—'} %${st[2] != null ? ` · fuel ${Math.round(st[2])} %` : ''}`)
+    if (e.affiliation === 'unknown') { const d = s.snapshot?.deception[e.id]; if (d) lines.push(`deception: ${d.band} (${Math.round(d.probability * 100)} %)`) }
+    return { title: e.label, lines }
   }
 }
 
-function circle(center: [number, number], radiusM: number, steps = 40): number[][] {
-  const out: number[][] = []
-  const dLat = radiusM / 111_320, dLng = radiusM / (111_320 * Math.cos((center[1] * Math.PI) / 180))
-  for (let i = 0; i <= steps; i++) { const a = (i / steps) * Math.PI * 2; out.push([center[0] + dLng * Math.cos(a), center[1] + dLat * Math.sin(a)]) }
-  return out
+function dr(lng: number, lat: number, heading: number | null, speed: number | null, dt: number): [number, number] {
+  if (!speed || heading == null || dt <= 0) return [lng, lat]
+  const d = speed * dt, r = (heading * Math.PI) / 180
+  return [lng + (d * Math.sin(r)) / (111_320 * Math.cos((lat * Math.PI) / 180)), lat + (d * Math.cos(r)) / 111_320]
+}
+
+function vesselModel(t: number | null): string {
+  const x = t ?? 0
+  if (x >= 80 && x < 90) return 'tanker'
+  if (x >= 70 && x < 80) return 'cargo_ship'
+  if (x >= 60 && x < 70) return 'ferry'
+  if (x === 30) return 'fishing'
+  if (x === 52) return 'tug'
+  if (x === 36 || x === 37) return 'sailboat'
+  if (x === 55) return 'coast_guard'
+  return 'cargo_ship'
 }

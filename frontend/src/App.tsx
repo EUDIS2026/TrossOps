@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { Session } from './core/session'
-import { actions, store, useApp } from './core/store'
+import { actions, store, useApp, type Panel } from './core/store'
 import { SceneController } from './scene/controller'
 import { RuntimeContext, type Runtime } from './ui/context'
-import { Decisions } from './ui/Decisions'
+import { Dock, Drawer } from './ui/Dock'
 import { Inspector } from './ui/Inspector'
-import { Kpis } from './ui/Kpis'
-import { LayerRail } from './ui/LayerRail'
-import { AlertsPanel, DataNotice, ErrorToast, HelpPanel, ReportComposer, SearchPalette, Timeline } from './ui/Panels'
+import { HoverCard, Kpis, Legend, RouteBanner, Timeline, Toasts } from './ui/Overlays'
 import { TopBar } from './ui/TopBar'
+
+const KEYS: Record<string, Panel> = { l: 'layers', a: 'feed', d: 'decisions', s: 'scenario', r: 'report', i: 'sources', '?': 'help' }
 
 function useShortcuts(rt: Runtime | null) {
   useEffect(() => {
@@ -16,22 +16,18 @@ function useShortcuts(rt: Runtime | null) {
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') { if (e.key === 'Escape') (e.target as HTMLElement).blur(); return }
       if (e.metaKey || e.ctrlKey || e.altKey) return
-      switch (e.key) {
-        case '/': e.preventDefault(); actions.togglePanel('search'); break
-        case 'l': case 'L': actions.togglePanel('layers'); break
-        case 'a': case 'A': actions.togglePanel('alerts'); break
-        case 'd': case 'D': actions.togglePanel('decisions'); break
-        case 'r': case 'R': actions.togglePanel('inputs'); break
-        case '3': actions.toggle3d(); break
-        case 'f': case 'F': if (store.get().selected?.kind === 'entity') actions.toggleFollow(); break
-        case '?': actions.togglePanel('help'); break
-        case 'Home': rt?.scene.resetOverview(); break
-        case 'Escape': {
-          const s = store.get()
-          const openFloating = (['search', 'alerts', 'decisions', 'inputs', 'help'] as const).find(p => s.panels[p])
-          if (openFloating) actions.setPanel(openFloating, false); else actions.deselect()
-          break
-        }
+      const k = e.key.toLowerCase()
+      if (k === '/') { e.preventDefault(); (document.querySelector('.search input') as HTMLInputElement | null)?.focus(); return }
+      if (KEYS[k]) { actions.togglePanel(KEYS[k]); return }
+      if (k === '3') actions.toggle3d()
+      else if (k === 'f' && store.get().selected) actions.toggleFollow()
+      else if (k === ' ') { e.preventDefault(); const c = rt?.session.clock; if (!c) return; if (c.mode === 'sim' && !c.paused) rt.session.pause(); else if (c.mode === 'sim') rt.session.resume(); else rt.session.pause() }
+      else if (e.key === 'Home') rt?.scene.flyToMode()
+      else if (e.key === 'Escape') {
+        const s = store.get()
+        if (s.route) { actions.cancelRoute(); return }
+        const open = (Object.keys(s.panels) as Panel[]).find(p => s.panels[p])
+        if (open) actions.setPanel(open, false); else actions.deselect()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -42,30 +38,29 @@ function useShortcuts(rt: Runtime | null) {
 export function App() {
   const mapRef = useRef<HTMLDivElement>(null)
   const [rt, setRt] = useState<Runtime | null>(null)
-  const inspectorOpen = useApp(s => s.panels.inspector && !!s.selected)
+  const inspector = useApp(s => !!s.selected)
+  const drawer = useApp(s => Object.entries(s.panels).some(([k, v]) => v && k !== 'search'))
   useEffect(() => {
     if (!mapRef.current) return
-    const scene = new SceneController(mapRef.current)
-    const session = new Session(scene)
-    setRt({ scene, session })
-    return () => { session.dispose(); scene.dispose() }
+    const session = new Session()
+    const scene = new SceneController(mapRef.current, session)
+    setRt({ session, scene })
+    return () => { scene.dispose(); session.dispose() }
   }, [])
   useShortcuts(rt)
   return <RuntimeContext.Provider value={rt}>
-    <div className={`app ${inspectorOpen ? 'inspector-open' : ''}`}>
+    <div className={`app ${inspector ? 'with-inspector' : ''} ${drawer ? 'with-drawer' : ''}`}>
       <div className="map-root" ref={mapRef} aria-label="Operational map" role="application" />
       <TopBar />
       <Kpis />
-      <LayerRail />
+      <Dock />
+      <Drawer />
       <Inspector />
-      <AlertsPanel />
-      <Decisions />
-      <ReportComposer />
-      <SearchPalette />
-      <HelpPanel />
+      <Legend />
+      <RouteBanner />
+      <HoverCard />
       <Timeline />
-      <DataNotice />
-      <ErrorToast />
+      <Toasts />
     </div>
   </RuntimeContext.Provider>
 }

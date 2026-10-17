@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { EntityBuffer, MAX_EXTRAPOLATION_S, wrapHeadingDelta } from '../entityBuffer'
 
-const tick = (atS: number, rows: [string, number, number, number | null, number | null, number | null, 'normal'][]) => ({ atS, atTime: '', worldRevision: 1, rows })
+const tick = (atS: number, rows: [string, number, number, number | null, number | null, number | null, 'normal'][]) => ({ atS, atTime: '', worldRevision: 1, catalogRevision: 1, rows })
 
 describe('EntityBuffer', () => {
   it('interpolates position and wraps heading through north', () => {

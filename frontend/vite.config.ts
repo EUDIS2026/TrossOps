@@ -5,5 +5,8 @@ export default defineConfig({
   plugins: [react()],
   server: { port: 5173, proxy: { '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true } } },
   preview: { port: 4173, proxy: { '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true } } },
-  build: { target: 'es2022', sourcemap: true, chunkSizeWarningLimit: 1600 },
+  build: {
+    target: 'es2022', sourcemap: true, chunkSizeWarningLimit: 1600,
+    rollupOptions: { output: { manualChunks: { maplibre: ['maplibre-gl'], three: ['three'], milsymbol: ['milsymbol'], h3: ['h3-js'], react: ['react', 'react-dom'] } } },
+  },
 })

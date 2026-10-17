@@ -1,4 +1,4 @@
-"""TrossOps national scene API. Everything served here is synthetic unless the payload says `public`."""
+"""TrossOps national scene API. Everything served here is synthetic unless the payload says `public` or `observed`."""
 from __future__ import annotations
 
 import asyncio
@@ -8,15 +8,17 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
-from . import rules, views
+from . import planner, rules, views
 from .engine import Engine
 from .inputs import CHANNEL_META
 from .models import CommitIn, EventIn, InputIn
 from .weather import PUBLIC_POINTS, WeatherService
 
-API_VERSION = "1.0.0"
+API_VERSION = "2.0.0"
 default_db = Path(__file__).parents[1] / "data" / "trossops.sqlite"
 
 
@@ -41,13 +43,23 @@ engine = Engine(_db, speed=_speed, start_s=_start_s, epoch=_epoch_from_env(_spee
 weather = WeatherService()
 
 app = FastAPI(title="TrossOps National Scene API", version=API_VERSION)
+app.add_middleware(GZipMiddleware, minimum_size=2048)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4173", "http://127.0.0.1:4173"],
                    allow_methods=["GET", "POST"], allow_headers=["*"])
+
+try:  # real public feeds (adsb.lol, Digitraffic, SMHI, Open-Meteo, RainViewer, polisen.se, Krisinformation, NOAA)
+    from .routes_live import router as live_router
+    from . import feed_inputs
+    app.include_router(live_router)
+    engine.external_inputs = feed_inputs.inputs_for_engine
+except ImportError:  # pragma: no cover - feeds package not installed in this build
+    live_router = None
 
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "working", "mode": "synthetic", "apiVersion": API_VERSION, "clock": engine.clock(), "rules": len(rules.RULES), "entities": len(engine.world.entities)}
+    return {"status": "working", "mode": "synthetic", "apiVersion": API_VERSION, "clock": engine.clock(), "rules": len(rules.RULES),
+            "entities": len(engine.world.entities), "formations": len(engine.world.formations), "feeds": live_router is not None}
 
 
 @app.get("/api/clock")
@@ -58,7 +70,21 @@ def clock() -> dict:
 @app.get("/api/views")
 def get_views() -> dict:
     return {"roles": [r.model_dump() for r in views.ROLES], "layers": [l.model_dump() for l in views.LAYERS], "rules": rules.rule_catalogue(),
-            "channels": [{"id": k, **v} for k, v in CHANNEL_META.items()], "regionScope": views.REGION_SCOPE}
+            "channels": [{"id": k, **v} for k, v in CHANNEL_META.items()], "regionScope": views.REGION_SCOPE, "exclusiveGroups": views.EXCLUSIVE_GROUPS}
+
+
+@app.get("/api/world")
+def world() -> dict:
+    """Order of battle, declared motion and shared route geometry (changes only when `catalogRevision` does)."""
+    return engine.catalog()
+
+
+@app.get("/api/sites/{site_id}/layout")
+def site_layout(site_id: str) -> dict:
+    lay = engine.world.layouts.get(site_id)
+    if not lay:
+        raise HTTPException(404, "Site not found")
+    return lay.to_api()
 
 
 @app.get("/api/scene/snapshot")
@@ -162,6 +188,57 @@ def apply_event(event: EventIn) -> dict:
         raise HTTPException(404, "Asset not found") from None
 
 
+class PlanIn(BaseModel):
+    entityId: str
+    to: list[float] = Field(min_length=2, max_length=2)
+
+
+class PlanCommitIn(BaseModel):
+    entityId: str
+    path: list[list[float | None]]
+    speeds: list[float]
+    airborne: bool = False
+    label: str = "Planned route"
+    expectedRevision: int = Field(ge=1)
+
+
+@app.post("/api/plan/route")
+def plan_route(body: PlanIn) -> dict:
+    ev = engine.evaluate(engine.now_s())
+    e = ev.entities.get(body.entityId)
+    if not e:
+        raise HTTPException(404, "Entity not found")
+    restricted = [a for a in engine.world.areas if a["kind"] == "restricted_zone"]
+    warnings = [{"title": i.title, "center": (i.position.longitudeDeg, i.position.latitudeDeg), "radiusM": i.radiusM or 50_000}
+                for i in ev.inputs if i.channel == "weather_advisory" and i.position]
+    try:
+        result = planner.plan(e, (body.to[0], body.to[1]), ev.fx.predictions, restricted, warnings)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return {**result, "worldRevision": engine.revision, "atS": round(ev.t, 1)}
+
+
+@app.post("/api/plan/commit")
+def plan_commit(body: PlanCommitIn) -> dict:
+    if len(body.speeds) != len(body.path) - 1 or len(body.path) < 2:
+        raise HTTPException(422, "speeds must have one entry per segment")
+    e = engine.evaluate(engine.now_s()).entities.get(body.entityId)
+    fuel = e.readiness.fuelPct if e and e.readiness else None
+    plan = {"path": body.path, "speeds": body.speeds, "startS": round(engine.now_s(), 1), "airborne": body.airborne, "label": body.label,
+            "fuelStart": fuel, "fuelBurnPerKm": planner.BURN_PER_KM.get(e.kind, 0.1) if e else 0.0}
+    try:
+        return engine.commit_plan(body.entityId, plan, body.expectedRevision)
+    except ValueError:
+        raise HTTPException(409, "World revision changed; refresh before committing") from None
+    except KeyError:
+        raise HTTPException(404, "Entity not found") from None
+
+
+@app.post("/api/plan/{entity_id}/cancel")
+def plan_cancel(entity_id: str) -> dict:
+    return engine.cancel_plan(entity_id)
+
+
 @app.get("/api/environment/points")
 def environment_points() -> dict:
     return {"source": "public city reference points", "points": PUBLIC_POINTS}
@@ -176,7 +253,7 @@ def environment_forecast(location: str) -> dict:
 
 @app.get("/api/stream")
 async def stream(interval: float = Query(default=1.0, ge=0.25, le=10)) -> StreamingResponse:
-    """Server-sent events: `tick` (compact kinematics) every interval, `revision` on any mutation."""
+    """Server-sent events: `tick` (observed tracks) every interval, `revision` on any mutation."""
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
@@ -193,7 +270,8 @@ async def stream(interval: float = Query(default=1.0, ge=0.25, le=10)) -> Stream
                     msg = await asyncio.wait_for(queue.get(), timeout=interval)
                     yield f"event: {msg['type']}\ndata: {json.dumps(msg)}\n\n"
                 except asyncio.TimeoutError:
-                    yield f"event: tick\ndata: {json.dumps(engine.kinematics())}\n\n"
+                    tick = await asyncio.to_thread(engine.kinematics)
+                    yield f"event: tick\ndata: {json.dumps(tick)}\n\n"
         finally:
             if listener in engine.listeners:
                 engine.listeners.remove(listener)
