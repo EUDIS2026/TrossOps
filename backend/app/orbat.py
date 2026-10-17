@@ -138,7 +138,7 @@ SITES: list[SiteDef] = [
     SiteDef("radar-syd", "Sensor Site Syd", "radar", "ystad", (8, 3), 0, "Sea Surveillance", ["radar", "sea_picture"], sidc="SFGPIR------", layer="infra.sensors"),
     SiteDef("radar-vast", "Sensor Site Väst", "radar", "uddevalla", (-9, 2), 0, "Sea Surveillance", ["radar", "sea_picture"], sidc="SFGPIR------", layer="infra.sensors"),
     SiteDef("radar-ost", "Sensor Site Öst", "radar", "norrtalje", (8, -6), 0, "Air Surveillance", ["radar", "air_picture", "sea_picture"], sidc="SFGPIR------", layer="infra.sensors"),
-    SiteDef("radar-bothnia", "Sensor Site Bothnia", "radar", "harnosand", (6, 3), 0, "Air Surveillance", ["radar", "air_picture"], sidc="SFGPIR------", layer="infra.sensors"),
+    SiteDef("radar-bothnia", "Sensor Site Bothnia", "radar", "harnosand", (-4.5, 8), 0, "Air Surveillance", ["radar", "air_picture"], sidc="SFGPIR------", layer="infra.sensors"),
     SiteDef("comms-mitt", "Comms Node Mitt", "comms", "eskilstuna", (2, 6), 0, "Signals Regiment", ["comms_hub"], sidc="SFGPIUT-----", layer="infra.comms"),
     SiteDef("comms-norr", "Comms Node Norr", "comms", "sundsvall", (-3, 5), 0, "Signals Regiment", ["comms_hub"], sidc="SFGPIUT-----", layer="infra.comms"),
     SiteDef("comms-syd", "Comms Node Syd", "comms", "jonkoping", (5, -5), 0, "Signals Regiment", ["comms_hub"], sidc="SFGPIUT-----", layer="infra.comms"),
@@ -149,9 +149,9 @@ SITES: list[SiteDef] = [
     SiteDef("power-vast", "Grid Node Väst", "power", "trollhattan", (4, 3), 0, "Grid operator (public)", ["power"], "civil", "SNGPIUE-----", "infra.power"),
     SiteDef("port-goteborg", "Port Göteborg (civil)", "port", "goteborg", (-4, -3), 0, "Port authority (public)", ["port", "fuel"], "civil", "SNGPIBN-----", "infra.transport"),
     SiteDef("port-trelleborg", "Port Trelleborg (civil)", "port", "trelleborg", (0, 0), 0, "Port authority (public)", ["port"], "civil", "SNGPIBN-----", "infra.transport"),
-    SiteDef("port-lulea", "Port Luleå (civil)", "port", "lulea", (3, -3), 0, "Port authority (public)", ["port", "fuel"], "civil", "SNGPIBN-----", "infra.transport"),
-    SiteDef("bridge-oresund", "Öresund crossing (civil)", "bridge", "malmo", (-6, 0), 0, "Transport authority (public)", ["transport"], "civil", "SNGPIT------", "infra.transport"),
-    SiteDef("bridge-hoga", "Höga Kusten crossing (civil)", "bridge", "harnosand", (4, 8), 0, "Transport authority (public)", ["transport"], "civil", "SNGPIT------", "infra.transport"),
+    SiteDef("port-lulea", "Port Luleå (civil)", "port", "lulea", (2.5, -0.5), 0, "Port authority (public)", ["port", "fuel"], "civil", "SNGPIBN-----", "infra.transport"),
+    SiteDef("bridge-oresund", "Öresund crossing (civil)", "bridge", "malmo", (-5.3, -5.0), 0, "Transport authority (public)", ["transport"], "civil", "SNGPIT------", "infra.transport"),
+    SiteDef("bridge-hoga", "Höga Kusten crossing (civil)", "bridge", "harnosand", (-1.3, 17.5), 0, "Transport authority (public)", ["transport"], "civil", "SNGPIT------", "infra.transport"),
     SiteDef("telecom-stockholm", "Telecom core Stockholm (civil)", "telecom", "stockholm", (-3, 5), 0, "Telecom operator (public)", ["telecom"], "civil", "SNGPIUT-----", "infra.telecom"),
     SiteDef("telecom-goteborg", "Telecom core Göteborg (civil)", "telecom", "goteborg", (5, 4), 0, "Telecom operator (public)", ["telecom"], "civil", "SNGPIUT-----", "infra.telecom"),
 ]
@@ -348,6 +348,26 @@ def urban(p: tuple[float, float], margin_km: float = 0.0) -> str | None:
 FIELD_CLASSES = {"secondary", "tertiary"}
 
 
+def beside(cache: "RouteCache", anchor: tuple[float, float], bearing: float, dist_m: float) -> tuple[float, float]:
+    """A dry, road-free point about dist_m from `anchor` toward `bearing`, reachable from the anchor on foot (the
+    straight line does not cross water): the first bearing in 30-degree steps that works. Cached."""
+    def compute():
+        mask = land_mask()
+        if mask is None:
+            return [geo.destination(anchor, bearing, dist_m)]
+        blocked = road_cells_near(anchor)
+        first = None
+        for turn in (0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180):
+            q = mask.nearest_dry(geo.destination(anchor, bearing + turn, dist_m), dist_m, blocked=blocked)
+            if q is None:
+                continue
+            first = first or q
+            if mask.leg_dry(anchor, q, 25.0):
+                return [q]
+        return [first or on_ground(cache, anchor)]
+    return cache.get(RouteCache.key("beside", anchor, bearing, dist_m), compute)[0]
+
+
 def field_anchor(cache: "RouteCache", center: tuple[float, float], radius_m: float = 3000.0) -> tuple[float, float]:
     """A road vertex near `center` that a unit in the field could actually reach and hide beside: on a
     secondary/tertiary road (any class on Gotland), on dry ground, outside the built-up area of a town. The
@@ -398,7 +418,7 @@ def field_positions(cache: "RouteCache", center: tuple[float, float], radius_m: 
             for _ in range(12):
                 p = geo.destination(base, rng.uniform(0, 360), rng.uniform(30, 80))
                 q = mask.nearest_dry(p, 600.0, blocked=blocked) if mask is not None else p
-                if q is None:
+                if q is None or (mask is not None and not mask.leg_dry(base, q, 25.0)):  # no wading to the position
                     continue
                 if all(geo.haversine_m(q, o) >= min_sep_m for o in out):
                     best = q
@@ -1004,7 +1024,7 @@ class Orbat:
         for k in edges:
             a, b = ring[k], ring[(k + 1) % (len(ring) - 1)]
             mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
-            posts.append(geo.destination(mid, geo.bearing_deg(lay.center, mid), 150.0))
+            posts.append(beside(self.cache, (round(mid[0], 6), round(mid[1], 6)), round(geo.bearing_deg(lay.center, mid), 1), 150.0))
         return posts
 
     def _home_guard(self) -> None:
@@ -1028,9 +1048,14 @@ class Orbat:
                     task = "Area security"
                     out = geo.destination(P[seat], (stable_seed(code, ci) % 360), (URBAN_KM.get(seat, 3.0) + 1.5) * 1000)
                     a = field_anchor(self.cache, out, 2500.0)
-                    posts = [geo.destination(a, 60, 90), geo.destination(a, 240, 90)]
+                    posts = [beside(self.cache, a, 60, 90.0)]
+                    for b, d in ((240, 90.0), (150, 250.0), (330, 400.0)):  # the second platoon on another spot
+                        q = beside(self.cache, a, b, d)
+                        if geo.haversine_m(q, posts[0]) >= 60:
+                            break
+                    posts.append(q)
                 for t in range(2):
-                    p = on_ground(self.cache, posts[t], max_m=1500.0)
+                    p = posts[t]
                     self.add(Node(f"hg-{code}-{ci + 1}{'ab'[t]}", f"HG {county} {ci + 1}{'AB'[t]}", "personnel", "land", "land.homeguard", "SFGPUCI----D", "own", cid,
                                   None, f"{ci + 1}{'AB'[t]}", "Home Guard platoon", "personnel", None, code, ["guard", "area_security"],
                                   MotionSpec("static", pos=(p[0], p[1], None), heading=t * 140), crew=30, range_km=20, tags=[task]))

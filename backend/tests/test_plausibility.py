@@ -128,3 +128,36 @@ def test_ground_routes_are_real_journeys(world):
             short.append((rid, round(length)))
     assert short == []
 
+
+def _reaches_road(land, roads, p, max_cells):
+    """Breadth-first walk over dry cells from p: does it reach a road cell within max_cells (~110 m each)?"""
+    c0 = land.cell(p)
+    r0, q0 = divmod(c0, land.w)
+    seen, frontier = {c0}, [c0]
+    while frontier:
+        nxt = []
+        for c in frontier:
+            if c in roads:
+                return True
+            r, q = divmod(c, land.w)
+            for rr, qq in ((r + 1, q), (r - 1, q), (r, q + 1), (r, q - 1)):
+                n = rr * land.w + qq
+                if abs(rr - r0) > max_cells or abs(qq - q0) > max_cells or n in seen:
+                    continue
+                seen.add(n)
+                if land.is_dry((land.lng0 + (qq + 0.5) * land.dlng, land.lat1 - (rr + 0.5) * land.dlat)):
+                    nxt.append(n)
+        frontier = nxt
+    return False
+
+
+def test_sites_and_field_units_are_not_cut_off_on_islands(world):
+    """Everything on the ground can be reached over dry land from a road (no port or platoon on a roadless islet)."""
+    land = geonet.land()
+    roads = set(land.road_cells(geonet.national()))
+    for name in geonet.cities():
+        roads |= land.road_cells(geonet.city(name))
+    cut_off = [sid for sid, c in world.sites.items() if not _reaches_road(land, roads, c, 45)]
+    cut_off += [e.base.id for e, p in _free_statics(world) if not _reaches_road(land, roads, p, 45)]
+    assert cut_off == []
+
