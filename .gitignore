@@ -39,3 +39,6 @@ trossops.bundle
 
 # Local dev probes
 frontend/scripts/_*.mjs
+
+# agent worktrees (local only)
+.claude/worktrees/

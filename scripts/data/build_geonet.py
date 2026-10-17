@@ -12,6 +12,7 @@ Outputs:
   backend/data/geo/city_<name>.json.gz   street graphs (motorway..minor)
   backend/data/geo/sea.bin               water mask + navigable routing grid
   backend/data/geo/land.bin              land/water mask incl. lakes and rivers (~110 m), for placement
+  backend/data/geo/roads.bin             every road incl. minor roads (z12), on the land grid, around placements
 
 The script has no third-party dependencies beyond httpx (already a backend runtime
 dependency). Downloaded tiles are cached outside the repo and treated as untrusted
@@ -1245,6 +1246,80 @@ def build_land(fetcher, args, rings):
     return {"grid": [W, H], "tiles": len(tiles), "water_share": round(share, 4)}
 
 
+ALL_ROAD_CLASSES = ["motorway", "trunk", "primary", "secondary", "tertiary", "minor", "service", "track", "path", "rail", "busway"]
+
+
+def tile_road_cells(args):
+    """Worker: cell ids (land grid) crossed by any transportation line of one tile, sampled every ~25 m."""
+    path, z, tx, ty, bbox, dlng, dlat, W, H = args
+    pieces = tile_roads((path, z, tx, ty, ALL_ROAD_CLASSES))
+    lng0, lat0, lng1, lat1 = bbox
+    n = float(1 << z) * EXTENT
+    cells = set()
+    for _ci, _ow, flat, _sc, _ec in pieces:
+        pts = [(flat[i] / n * 360.0 - 180.0, math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * flat[i + 1] / n))))) for i in range(0, len(flat), 2)]
+        for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+            d = haversine((ax, ay), (bx, by))
+            k = max(1, int(d / 25.0))
+            for j in range(k + 1):
+                x = ax + (bx - ax) * j / k
+                y = ay + (by - ay) * j / k
+                c = int((x - lng0) / dlng)
+                r = int((lat1 - y) / dlat)
+                if 0 <= c < W and 0 <= r < H:
+                    cells.add(r * W + c)
+    return list(cells)
+
+
+def build_roads(fetcher, args):
+    """Every road class at z12 (minor roads appear from z12) around the given centres, on the land-mask grid, so
+    placement keeps buildings off the small roads too. Centres: JSON list of [lng, lat, radius_km]."""
+    z = args.roads_zoom
+    centres = json.loads(Path(args.road_centres).read_text(encoding="utf-8"))
+    tiles = sorted({t for lng, lat, km in centres for t in circle_tiles(z, lng, lat, km)})
+    fetcher.fetch_all(tiles)
+    lng0, lat0, lng1, lat1 = LAND_BBOX
+    dlng, dlat = LAND_FINE
+    W, H = round((lng1 - lng0) / dlng), round((lat1 - lat0) / dlat)
+    log(f"roads: rasterising every road class of {len(tiles)} z{z} tiles onto the {W}x{H} land grid")
+    roads = bytearray(W * H)
+    known = bytearray(W * H)
+    for t in tiles:
+        tw, ts, te, tn = tile_bbox(*t)
+        r0 = max(0, math.ceil((lat1 - tn) / dlat - 0.5))
+        r1 = min(H - 1, math.floor((lat1 - ts) / dlat - 0.5))
+        c0 = max(0, math.ceil((tw - lng0) / dlng - 0.5))
+        c1 = min(W - 1, math.floor((te - lng0) / dlng - 0.5))
+        for r in range(r0, r1 + 1):
+            known[r * W + c0:r * W + c1 + 1] = b"\x01" * (c1 - c0 + 1)
+    jobs = [(str(fetcher.path(*t)), *t, LAND_BBOX, dlng, dlat, W, H) for t in tiles]
+    marked = 0
+    with cf.ProcessPoolExecutor(args.procs) as ex:
+        for cells in ex.map(tile_road_cells, jobs, chunksize=8):
+            for c in cells:
+                if not roads[c]:
+                    roads[c] = 1
+                    marked += 1
+    a = zlib.compress(pack_bits(roads), 9)
+    b = zlib.compress(pack_bits(known), 9)
+    header = {
+        "version": 1, "kind": "roadmask", "bbox": list(LAND_BBOX), "w": W, "h": H, "dlng": dlng, "dlat": dlat,
+        "roads": {"zlen": len(a), "classes": ALL_ROAD_CLASSES}, "known": {"zlen": len(b)}, "tiles": len(tiles), "centres": len(centres),
+        "source": f"OpenFreeMap {fetcher.version} transportation layer z{z} (every class present at that zoom)", "licence": LICENCE,
+        "row0": "north", "bits": "LSB-first, row-major from the north-west corner; 1 = a road crosses the cell",
+    }
+    hj = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    path = OUT_DIR / "roads.bin"
+    with open(path, "wb") as fh:
+        fh.write(b"TROSRDS1")
+        fh.write(struct.pack("<I", len(hj)))
+        fh.write(hj)
+        fh.write(a)
+        fh.write(b)
+    log(f"  {marked} road cells; wrote {path.relative_to(REPO)}: {path.stat().st_size / 1e6:.2f} MB")
+    return {"tiles": len(tiles), "road_cells": marked}
+
+
 def build_sea(fetcher, args):
     z = args.sea_zoom
     tiles = tiles_in_bbox(z, *SEA_BBOX)
@@ -1416,6 +1491,8 @@ def main():
     ap.add_argument("--city-simplify-m", type=float, default=0.7)
     ap.add_argument("--sea-zoom", type=int, default=10)
     ap.add_argument("--land-zoom", type=int, default=11)
+    ap.add_argument("--roads-zoom", type=int, default=12)
+    ap.add_argument("--road-centres", default="", help="JSON [[lng, lat, radius_km], ...] for the roads step")
     ap.add_argument("--river-cells", type=int, default=60, help="fine cells (~280 m) of sea-connected river kept as water")
     ap.add_argument("--workers", type=int, default=6, help="concurrent downloads (max 6)")
     ap.add_argument("--procs", type=int, default=max(1, (os.cpu_count() or 2) - 1), help="decode processes")
@@ -1438,6 +1515,8 @@ def main():
         report["sea"] = build_sea(fetcher, args)
     if "land" in steps:
         report["land"] = build_land(fetcher, args, rings)
+    if "roads" in steps:
+        report["roads"] = build_roads(fetcher, args)
     log(f"downloaded {fetcher.fetched} tiles this run")
     print(json.dumps(report, indent=1))
 
