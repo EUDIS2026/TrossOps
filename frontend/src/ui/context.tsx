@@ -27,8 +27,28 @@ export function ago(iso: string | null | undefined): string {
   return s < 60 ? 'now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`
 }
 export const pct = (v: number | null | undefined, d = 0) => (v === null || v === undefined ? '—' : `${v.toFixed(d)} %`)
-export const kindLabel: Record<string, string> = { fixed_wing: 'Fixed-wing aircraft', helicopter: 'Helicopter', multirotor: 'Multirotor drone', ground_vehicle: 'Ground vehicle', vessel: 'Vessel', personnel: 'Personnel', facility: 'Installation', infrastructure: 'Infrastructure', unknown: 'Unknown track', formation: 'Formation' }
-export const channelLabel: Record<string, string> = { field_report: 'Field report', unit_sitrep: 'Unit SITREP', logistics_report: 'Logistics report', maintenance_log: 'Maintenance log', sensor_detection: 'Sensor detection', intel_report: 'Intelligence report', civil_emergency: 'Civil emergency', weather_advisory: 'Weather advisory', infrastructure_status: 'Infrastructure status', public_news: 'Public news', cyber_alert: 'Cyber alert', command_directive: 'Command directive', allied_liaison: 'Allied liaison', head_of_state_directive: 'Head-of-state directive', police_event: 'Police event', crisis_info: 'Crisis information' }
+export const kindLabel: Record<string, string> = { fixed_wing: 'Fixed-wing aircraft', helicopter: 'Helicopter', multirotor: 'Multirotor drone', ground_vehicle: 'Ground vehicle', vessel: 'Ship', personnel: 'Personnel', facility: 'Site', infrastructure: 'Infrastructure', unknown: 'Unknown track', formation: 'Formation' }
+
+/** Inspector heading per selection kind: the glossary word, never an internal id. */
+export const selectionLabel: Record<string, string> = {
+  entity: 'Unit', formation: 'Formation', site: 'Site', track: 'Track', aircraft: 'Live aircraft', vessel: 'Live ship', input: 'Report', alert: 'Alert',
+  intervention: 'Course of action', cell: 'Analysis cell', area: 'Area', police: 'Police event', warning: 'Weather warning', cable: 'Undersea cable',
+}
+
+/** Site kinds as written in a site's first tag. */
+export const siteKindLabel: Record<string, string> = {
+  airbase: 'Airbase', heliport: 'Heliport', navbase: 'Naval base', garrison: 'Garrison', hq: 'Headquarters', depot: 'Depot', hospital: 'Field hospital',
+  radar: 'Sensor site', comms: 'Communications node', power: 'Power grid node', port: 'Port', bridge: 'Fixed crossing', telecom: 'Telecom core',
+}
+
+const WORD: Record<string, string> = {
+  qra: 'quick-reaction alert', isr: 'surveillance (ISR)', sar: 'search and rescue', asw: 'anti-submarine', aew: 'airborne early warning', sigint: 'signals intelligence',
+  medevac: 'medical evacuation', mech_infantry: 'mechanised infantry', comms_hub: 'communications hub', small_uas: 'small drone', low_level: 'low level',
+}
+/** Capability and tag words in plain language, abbreviations spelled out. */
+export const plainWord = (w: string) => WORD[w] ?? w.replace(/_/g, ' ')
+
+export const channelLabel: Record<string, string> = { field_report: 'Field report', unit_sitrep: 'Unit status report (SITREP)', logistics_report: 'Logistics report', maintenance_log: 'Maintenance log', sensor_detection: 'Sensor detection', intel_report: 'Intelligence report', civil_emergency: 'Civil emergency', weather_advisory: 'Weather advisory', infrastructure_status: 'Infrastructure status', public_news: 'Public news', cyber_alert: 'Cyber alert', command_directive: 'Command directive', allied_liaison: 'Allied liaison', head_of_state_directive: 'Head-of-state directive', police_event: 'Police event', crisis_info: 'Crisis information' }
 
 /** NATO symbol rendered from its SIDC into a small canvas. */
 export function NatoGlyph({ sidc, condition = 'normal', size = 44 }: { sidc: string | null | undefined; condition?: Condition; size?: number }) {

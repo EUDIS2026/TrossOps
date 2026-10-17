@@ -347,3 +347,23 @@ b.good { color: var(--good); }
 .terrain-profile svg { display: block; border-radius: 6px; background: rgba(255, 255, 255, 0.03); }
 .terrain-profile .ground { fill: rgba(150, 132, 96, 0.55); stroke: #b39c6b; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .terrain-profile .alt { fill: none; stroke: #4ea1ff; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+
+/* ---- clarity pass: tooltips, clickable figures, empty states ---------------------------------------------------- */
+.dock-btn[data-tip]:hover::after, .dock-btn[data-tip]:focus-visible::after { content: attr(data-tip); position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+  white-space: pre-line; width: max-content; max-width: 240px; line-height: 1.45; padding: 6px 10px; border-radius: 7px; background: var(--panel-solid); border: 1px solid var(--hair-2); color: var(--text); font-size: 12px; font-weight: 500;
+  box-shadow: var(--shadow); pointer-events: none; z-index: 50; }
+.drawer:focus, .inspector:focus { outline: none; }
+button.status-chip { cursor: pointer; transition: border-color 0.2s, background 0.2s; }
+button.status-chip:hover { border-color: var(--hair-2); background: var(--raised-2); }
+.kpi { pointer-events: auto; cursor: default; }
+button.kpi { cursor: pointer; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--hair); transition: border-color 0.2s; }
+button.kpi:hover { border-color: var(--accent); }
+.quiet.empty { padding: 14px 6px; line-height: 1.5; }
+.search-results .quiet.empty { padding: 10px; }
+.lgroup-head.static { justify-content: space-between; padding-right: 4px; }
+.lgroup-head.static small { font-weight: 400; color: var(--text-3); font-size: 11px; }
+.layers-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.layers-foot .btn { flex: none; }
+.section.first { margin-top: 0; }
+.section .steps b { color: var(--text); font-weight: 600; }
+.legend-title small { color: var(--text-3); font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; font-size: 9.5px; margin-right: 4px; }
