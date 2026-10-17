@@ -104,7 +104,7 @@ export class WindLayer implements CustomLayerInterface {
     const speedup = (PX_PER_S_AT_10MPS * mpp) / 10
     this.frame = (this.frame + 1) % 2
     const cx = (c.lng + 180) / 360, sinc = Math.sin((c.lat * Math.PI) / 180), cy = 0.5 - Math.log((1 + sinc) / (1 - sinc)) / (4 * Math.PI)
-    const verts = new Float32Array(N * (TAIL - 1) * 2 * 5)
+    const verts = this.verts
     let o = 0
     for (let k = 0; k < N; k++) {
       const b = k * TAIL
@@ -136,6 +136,9 @@ export class WindLayer implements CustomLayerInterface {
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.disable(gl.DEPTH_TEST)
     gl.drawArrays(gl.LINES, 0, o / 5)
     gl.bindVertexArray(null)
-    map.triggerRepaint()
   }
+
+  /** Continuously animated while shown; the scene controller paces the repaints. */
+  wantsFrame() { return this.enabled && !!this.grid && !!this.map }
+  private verts = new Float32Array(N * (TAIL - 1) * 2 * 5) // reused every frame (was ~1 MB of garbage per frame)
 }

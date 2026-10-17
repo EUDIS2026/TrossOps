@@ -53,6 +53,14 @@ export class SceneController {
   private drawn: Drawn[] = []
   private lastLabels = 0
   private lastAnalysis = 0
+  // Repaint scheduling: MapLibre redraws the whole map on every repaint, so animated layers only ask for one when
+  // something visibly changed, at most every `paintGap` ms (60 Hz when frames are cheap, 30 Hz when they are not).
+  private pendingPaint = true
+  private lastPaintAt = 0
+  private frameEma = 16
+  private lastRaf = 0
+  private labelSig = ''
+  private leaderSig = ''
   private analysisKey = ''
   private contributions: Awaited<ReturnType<typeof api.attention>>['contributions'] = []
   private grid: A.GridPoint[] = []
@@ -70,6 +78,8 @@ export class SceneController {
       container, style: styleFor(s.basemap), center: [s.camera.lng, s.camera.lat], zoom: s.camera.zoom, pitch: s.camera.pitch, bearing: s.camera.bearing,
       minZoom: 2.5, maxZoom: 19, maxPitch: 80, attributionControl: { compact: true, customAttribution: ATTRIBUTION[s.basemap] }, cancelPendingTileRequestsWhileZooming: false,
       canvasContextAttributes: { antialias: true },
+      // High-DPI laptops (125-200 %) multiply the fill cost of terrain, hillshade and 3D; 1.5 keeps text crisp.
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
     })
     this.camera = new CinematicCamera(this.map)
     Object.assign(window as unknown as Record<string, unknown>, { __map: this.map, __scene: this, __store: store, __session: session })
@@ -103,6 +113,7 @@ export class SceneController {
     if (!this.map.getLayer(this.wind.id)) this.map.addLayer(this.wind, 'reports')
     if (!this.map.getLayer(this.sprites.id)) this.map.addLayer(this.sprites, 'labels')
     this.prev = {}
+    this.labelSig = ''; this.leaderSig = ''; this.pendingPaint = true
     this.onStore()
     if (this.session.world) this.onWorld(this.session.world)
     this.layoutsDirty = true
@@ -411,7 +422,7 @@ export class SceneController {
     const zs = Math.max(0.78, Math.min(1.15, 0.8 + (zoom - 5) * 0.035))
     const models3d = s.threeD
     const modelInstances: ModelInstance[] = []
-    this.sprites.begin(cx, cy)
+    this.sprites.begin(cx, cy, worldPx)
     const drawn: Drawn[] = []
     const hovered = s.hovered?.id
     for (const it of items) {
@@ -467,12 +478,28 @@ export class SceneController {
         drawn.push({ kind: 'vessel', id: String(v.id), lng, lat, alt: null, r: sz * 0.3 })
       }
     }
-    this.sprites.commit()
+    const spritesChanged = this.sprites.commit()
     this.models.setInstances(modelInstances, zoom)
     this.drawn = drawn
+    this.schedulePaint(now, spritesChanged)
     if (now - this.lastLabels > 250) { this.lastLabels = now; this.updateLabels(items, s, zoom) }
     if (now - this.lastAnalysis > 1500) { this.lastAnalysis = now; this.updateAnalysis(s, w, zoom); void this.refreshEnvironment(); this.updateTrail(s, w, t) }
     this.followCamera(s, w)
+  }
+
+  /** Ask MapLibre for a repaint only when an animated layer changed (sprites moved ≥ 0.35 px, models animate, wind
+   * particles flow), paced to the device: 60 Hz while frames stay cheap, 30 Hz once they get expensive. Camera
+   * movement and tile loads repaint on their own. */
+  private schedulePaint(now: number, spritesChanged: boolean) {
+    if (this.lastRaf) this.frameEma = this.frameEma * 0.9 + Math.min(200, now - this.lastRaf) * 0.1
+    this.lastRaf = now
+    if (spritesChanged || this.models.wantsFrame() || this.wind.wantsFrame()) this.pendingPaint = true
+    if (!this.pendingPaint) return
+    const gap = this.frameEma > 20 ? 33 : 15
+    if (now - this.lastPaintAt < gap) return
+    this.pendingPaint = false
+    this.lastPaintAt = now
+    this.map.triggerRepaint()
   }
 
   /** Screen-space declutter for aggregates and sites below street zoom: a symbol that would overlap one already
@@ -481,13 +508,21 @@ export class SceneController {
   private placed = new Map<string, [number, number]>()
   private leaders: number[][][] = []
   private declutter(items: ReturnType<WorldModel['cut']>, zoom: number, now: number) {
-    if (zoom >= 11.5) { if (this.leaders.length && now - this.lastLabels > 250) { this.leaders = []; setData(this.map, 'leaders', empty()) } return items }
+    if (zoom >= 11.5) { if (this.leaders.length && now - this.lastLabels > 250) { this.leaders = []; this.leaderSig = ''; setData(this.map, 'leaders', empty()) } return items }
     const R = 30
-    const occupied: [number, number][] = []
+    const grid = new Map<number, number[]>() // occupied screen points bucketed into R×R cells
+    const cellOf = (x: number, y: number) => Math.floor(x / R) * 4096 + Math.floor(y / R)
     const order = items.map((it, i) => ({ it, i, pri: it.aggregate ? 1000 + it.count : it.node.e.kind === 'facility' || it.node.e.kind === 'infrastructure' ? 500 : it.node.pose.speed > 0.5 ? 2000 : 100 }))
       .sort((a, b) => b.pri - a.pri || (a.it.node.e.id < b.it.node.e.id ? -1 : 1))
     const leaders: number[][][] = []
-    const free = (x: number, y: number) => occupied.every(([ox, oy]) => (ox - x) ** 2 + (oy - y) ** 2 >= R * R)
+    const free = (x: number, y: number) => {
+      const gx = Math.floor(x / R), gy = Math.floor(y / R)
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+        const pts = grid.get((gx + dx) * 4096 + gy + dy)
+        if (pts) for (let k = 0; k < pts.length; k += 2) if ((pts[k] - x) ** 2 + (pts[k + 1] - y) ** 2 < R * R) return false
+      }
+      return true
+    }
     for (const o of order) {
       const it = o.it
       const p = this.map.project([it.lng, it.lat])
@@ -508,14 +543,20 @@ export class SceneController {
           it.lng = ll.lng; it.lat = ll.lat
         }
       } else if (movable) this.placed.delete(it.node.e.id)
-      occupied.push([x, y])
+      const key = cellOf(x, y)
+      const cell = grid.get(key)
+      if (cell) cell.push(x, y); else grid.set(key, [x, y])
     }
-    if (now - this.lastLabels > 250) { this.leaders = leaders; setData(this.map, 'leaders', { type: 'FeatureCollection', features: leaders.map(c => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: c } })) }) }
+    if (now - this.lastLabels > 250) {
+      this.leaders = leaders
+      const sig = leaders.map(c => `${c[1][0].toFixed(4)},${c[1][1].toFixed(4)}`).join(';')
+      if (sig !== this.leaderSig) { this.leaderSig = sig; setData(this.map, 'leaders', { type: 'FeatureCollection', features: leaders.map(c => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: c } })) }) }
+    }
     return items
   }
 
   private updateLabels(items: ReturnType<WorldModel['cut']>, s: AppState, zoom: number) {
-    if (!this.onLayers.has('picture.labels')) return
+    if (!this.onLayers.has('picture.labels')) { if (this.labelSig) { this.labelSig = ''; setData(this.map, 'labels', empty()) } return }
     const feats: GeoJSON.Feature[] = []
     for (const it of items) {
       const e = it.node.e
@@ -530,6 +571,12 @@ export class SceneController {
       feats.push({ type: 'Feature', properties: { text: `${a.callsign ?? a.id}${a.altM ? ` FL${Math.round(a.altM / 30.48)}` : ''}`, agg: false, rank: 3, color: a.military ? palette.liveMil : '#9ec7e0' }, geometry: { type: 'Point', coordinates: [a.lng, a.lat] } })
     }
     if (zoom >= 10.5 && this.onLayers.has('live.sea')) for (const v of s.live.vessels) if (v.name) feats.push({ type: 'Feature', properties: { text: v.name, agg: false, rank: 4, color: '#9fe0cc' }, geometry: { type: 'Point', coordinates: [v.lng, v.lat] } })
+    // same texts at the same place (to ~2 px) → nothing to re-place
+    const px = 512 * 2 ** zoom / 2
+    let sig = `${Math.round(zoom * 4)}|`
+    for (const f of feats) { const c = (f.geometry as GeoJSON.Point).coordinates; sig += `${f.properties!.text}@${Math.round(mercX(c[0]) * px)},${Math.round(mercY(c[1]) * px)};` }
+    if (sig === this.labelSig) return
+    this.labelSig = sig
     setData(this.map, 'labels', { type: 'FeatureCollection', features: feats })
   }
 

@@ -49,6 +49,10 @@ export class SpriteLayer implements CustomLayerInterface {
   private n = 0
   private cx = 0.5; private cy = 0.5
   private stage: number[] = []
+  // what was last handed to the GPU, in absolute mercator, to tell whether a new frame changes anything on screen
+  private shown = new Float64Array(0)
+  private shownN = -1
+  private worldPx = 512
   private loc: Record<string, number> = {}
   private uni: Record<string, WebGLUniformLocation | null> = {}
 
@@ -115,8 +119,8 @@ export class SpriteLayer implements CustomLayerInterface {
     this.pending = []
   }
 
-  /** Start a frame; the centre should be near the camera centre (mercator 0..1). */
-  begin(cx: number, cy: number) { this.cx = cx; this.cy = cy; this.stage.length = 0; this.n = 0 }
+  /** Start a frame; the centre should be near the camera centre (mercator 0..1); worldPx = 512·2^zoom. */
+  begin(cx: number, cy: number, worldPx = 512) { this.cx = cx; this.cy = cy; this.worldPx = worldPx; this.stage.length = 0; this.n = 0 }
 
   /** Queue one sprite. rotDeg is the screen rotation (clockwise), sizePx the cell's displayed size in css px. */
   push(mx: number, my: number, altM: number | null, lat: number, key: string, sizePx: number, rotDeg: number, alpha: number, yoffPx = 0) {
@@ -127,10 +131,30 @@ export class SpriteLayer implements CustomLayerInterface {
     this.n++
   }
 
-  commit() {
+  /** Hand the frame to the GPU buffer. Returns true when it differs visibly (≥ 0.35 px, symbol, rotation, size or
+   * opacity) from what was last drawn; the scene controller only asks MapLibre for a repaint then. */
+  commit(): boolean {
     if (this.data.length < this.stage.length) this.data = new Float32Array(this.stage.length * 2)
     this.data.set(this.stage)
-    this.map?.triggerRepaint()
+    const st = this.stage, len = st.length
+    let dirty = this.n !== this.shownN
+    if (!dirty) {
+      const sh = this.shown, px = 0.35 / this.worldPx
+      for (let i = 0; i < len; i += STRIDE) {
+        if (Math.abs(st[i] + this.cx - sh[i]) > px || Math.abs(st[i + 1] + this.cy - sh[i + 1]) > px || Math.abs(st[i + 2] - sh[i + 2]) > px ||
+            Math.abs(st[i + 3] - sh[i + 3]) > 0.01 || Math.abs(st[i + 4] - sh[i + 4]) > 0.5 || st[i + 5] !== sh[i + 5] || st[i + 6] !== sh[i + 6] ||
+            Math.abs(st[i + 9] - sh[i + 9]) > 0.02) { dirty = true; break }
+      }
+    }
+    if (dirty) {
+      if (this.shown.length < len) this.shown = new Float64Array(len * 2)
+      for (let i = 0; i < len; i += STRIDE) {
+        for (let k = 0; k < STRIDE; k++) this.shown[i + k] = st[i + k]
+        this.shown[i] += this.cx; this.shown[i + 1] += this.cy
+      }
+      this.shownN = this.n
+    }
+    return dirty
   }
 
   render(gl: WebGL2RenderingContext, options: CustomRenderMethodInput) {
@@ -147,7 +171,7 @@ export class SpriteLayer implements CustomLayerInterface {
     gl.bufferData(gl.ARRAY_BUFFER, this.data.subarray(0, this.n * STRIDE), gl.DYNAMIC_DRAW)
     gl.uniformMatrix4fv(this.uni.u_mvp, false, mvp)
     gl.uniform2f(this.uni.u_viewport, gl.drawingBufferWidth, gl.drawingBufferHeight)
-    gl.uniform1f(this.uni.u_dpr, window.devicePixelRatio || 1)
+    gl.uniform1f(this.uni.u_dpr, this.map.getPixelRatio())
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.atlas); gl.uniform1i(this.uni.u_atlas, 0)
     gl.disable(gl.DEPTH_TEST)
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
