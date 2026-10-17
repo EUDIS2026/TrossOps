@@ -10,6 +10,7 @@ Payload split (v2):
 """
 from __future__ import annotations
 
+import bisect
 import json
 import math
 import sqlite3
@@ -233,20 +234,99 @@ class Engine:
         return out
 
     def inputs_at(self, t: float) -> list[InputReport]:
+        return self.inputs_and_feed_meta(t)[0]
+
+    def inputs_and_feed_meta(self, t: float) -> tuple[list[InputReport], dict]:
         scripted = inputs_mod.scripted_reports(self.epoch, t)
         cutoff = self.iso_at(t)
         posted = [p for p in self.posted if p.receivedAt <= cutoff or self.speed != 1.0]
+        injected = [p for p in self.injected if p.effectiveAt <= cutoff]
         external: list[InputReport] = []
+        meta: dict = {}
         if t >= self.now_s() - 30:  # real feeds only describe the present
             try:
-                external = self.external_inputs(t)
+                from . import relevance  # noqa: PLC0415
+                raw = self.external_inputs(t)
+                meta = {"thermalLatestAcquired": relevance.thermal_coverage(raw)}
+                external = relevance.relevant(raw, self.relevance_index(), scripted + posted + injected)
             except Exception:  # noqa: BLE001  a malformed public feed item must never take the operational picture down
-                external = []
-        injected = [p for p in self.injected if p.effectiveAt <= cutoff]
+                external, meta = [], {}
         allr = scripted + posted + injected + external
         for r in allr:
             r.acknowledged = r.id in self.acks
-        return sorted(allr, key=lambda r: r.effectiveAt)
+        return sorted(allr, key=lambda r: r.effectiveAt), meta
+
+    COLUMN_MIN_ROUTE_M = 20_000.0  # a declared land path at least this long is a road march (not a perimeter or bowser loop)
+    COLUMN_LOOKAHEAD_M = 80_000.0  # how far ahead of the column's lead vehicle its route is checked (~1.5 h at march speed)
+
+    def _march_motion(self, eid: str, ent) -> motion.MotionSpec | None:
+        m = self.plans[eid]["motion"] if eid in self.plans else ent.motion
+        if ent.node.domain != "land" or m is None or m.kind != "path" or m.path is None or m.path.length < self.COLUMN_MIN_ROUTE_M:
+            return None
+        return m
+
+    def relevance_index(self):
+        """Own sites and every own road-march route (declared or planned), rebuilt when the catalogue changes."""
+        from . import relevance  # noqa: PLC0415
+        cached = getattr(self, "_relevance", None)
+        if cached and cached[0] == self.catalog_revision:
+            return cached[1]
+        lines = []
+        for eid, ent in self.world.entities.items():
+            m = self._march_motion(eid, ent)
+            if m is not None and ent.base.affiliation == "own":
+                key = m.route_id or f"plan-{eid}"
+                if key not in {k for k, _ in lines}:
+                    lines.append((key, [(p[0], p[1]) for p in m.path.pts]))
+        own_sites = [p for sid, p in self.world.sites.items() if sid in self.world.entities and self.world.entities[sid].base.affiliation == "own"]
+        idx = relevance.RelevanceIndex(own_sites or list(self.world.sites.values()), [ln for _, ln in lines])
+        self._relevance = (self.catalog_revision, idx)
+        return idx
+
+    def columns_at(self, entities: dict[str, SceneEntity], t: float) -> list[dict]:
+        """Own road marches in motion at t, one per (route, direction) - companies marching the same road the same way are one
+        column: the route ahead from the column's tail to COLUMN_LOOKAHEAD_M beyond its lead vehicle, in the direction of
+        travel (rule R21 checks road situations on it, R22 heat sources)."""
+        groups: dict[tuple, list] = {}
+        for eid, ent in self.world.entities.items():
+            e = entities.get(eid)
+            m = self._march_motion(eid, ent)
+            if e is None or m is None or e.affiliation != "own":
+                continue
+            st = motion.state_at(m, t)
+            if st.phase not in ("moving", "returning"):
+                continue
+            direction = -1 if st.phase == "returning" else 1
+            groups.setdefault((m.route_id or f"plan-{eid}", direction), []).append((e, m, st))
+        out = []
+        for (route, direction), members in sorted(groups.items()):
+            path = members[0][1].path
+            dists = [st.distance for _, _, st in members]
+            if direction > 0:
+                tail, lead = min(dists), max(dists)
+                a, b = tail, min(path.length, lead + self.COLUMN_LOOKAHEAD_M)
+            else:
+                tail, lead = max(dists), min(dists)
+                a, b = max(0.0, lead - self.COLUMN_LOOKAHEAD_M), tail
+            i0 = bisect.bisect_right(path.cum_d, a)
+            i1 = bisect.bisect_left(path.cum_d, b)
+            pa, pb = path.at_distance(a), path.at_distance(b)
+            coords = [(pa[0], pa[1])] + [(q[0], q[1]) for q in path.pts[i0:i1]] + [(pb[0], pb[1])]
+            if direction < 0:
+                coords.reverse()
+            members.sort(key=lambda x: (-x[2].distance * direction, x[0].id))  # lead vehicle first
+            lead_e = members[0][0]
+            units: list[str] = []
+            for e, _, _ in members:
+                pe = entities.get(e.parentId or "")
+                u = pe.label if pe is not None else (e.unit or e.label).split(" · ")[0].split(" — ")[0]
+                if u not in units:
+                    units.append(u)
+            label = units[0] if len(units) == 1 else f"{units[0]} + {len(units) - 1} more"
+            out.append({"id": f"{route}-{'fwd' if direction > 0 else 'back'}", "label": label, "units": units, "entityIds": [e.id for e, _, _ in members],
+                        "lead": lead_e.id, "routeId": route, "ahead": coords, "lengthM": abs(lead - tail),
+                        "speedMps": max(1.0, sum(st.speed for _, _, st in members) / len(members))})
+        return out
 
     HISTORY_DT_S = 60.0
 
@@ -274,10 +354,10 @@ class Engine:
             if self._cache and self._cache[0] == key:
                 return self._cache[1]
             entities = self.entities_at(t)
-            inputs = self.inputs_at(t)
+            inputs, feed_meta = self.inputs_and_feed_meta(t)
             ctx = rules.Context(t=t, now_iso=self.iso_at(t), revision=self.revision, entities=entities, inputs=inputs, areas=self.world.areas,
                                 committed=self.commits, acknowledged=self.acks, cables=self.world.cables, sites=self.world.sites,
-                                history=self.track_history(entities, t))
+                                history=self.track_history(entities, t), columns=self.columns_at(entities, t), feed_meta=feed_meta)
             fx = rules.evaluate(ctx)
             for eid, st in fx.entity_status.items():
                 e = entities.get(eid)
