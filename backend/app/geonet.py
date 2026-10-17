@@ -326,12 +326,21 @@ class RoadNet:
         return [1.0 / v for v in spd], max(spd)
 
     def _assemble(self, start: LngLat, end: LngLat, s: int, t: int, edges: list[int],
-                  inv_speed: list[float], access_speed: float) -> Route:
+                  inv_speed: list[float], access_speed: float, access: str = "dry") -> Route:
+        """Edges s..t as one polyline. `access` decides the off-network legs start->s and t->end:
+        "none" starts and ends on the network; "dry" (default) keeps a leg only where it crosses dry ground,
+        otherwise the route starts/ends at the network node (a vehicle never drives straight across water)."""
+        sx, sy = self.x[s], self.y[s]
+        tx, ty = self.x[t], self.y[t]
+        mask = _land_or_none() if access == "dry" else None
+        if access == "none" or (mask is not None and not mask.leg_dry(start, (sx, sy))):
+            start = (sx, sy)
+        if access == "none" or (mask is not None and not mask.leg_dry((tx, ty), end)):
+            end = (tx, ty)
         coords: list[LngLat] = [(float(start[0]), float(start[1]))]
         classes_m: dict[str, float] = {}
         length = duration = 0.0
         snapped = False
-        sx, sy = self.x[s], self.y[s]
         lead = haversine_m(coords[0], (sx, sy))
         if lead > 0.5:
             snapped = True
@@ -350,7 +359,6 @@ class RoadNet:
             classes_m[cname] = classes_m.get(cname, 0.0) + L
             length += L
             duration += L * inv_speed[self.ecls[ei]]
-        tx, ty = self.x[t], self.y[t]
         tail = haversine_m((tx, ty), end)
         if tail > 0.5:
             snapped = True
@@ -364,9 +372,10 @@ class RoadNet:
                      classes_m={k: round(v, 1) for k, v in classes_m.items()}, snapped=snapped)
 
     def route(self, a: LngLat, b: LngLat, avoid: list[list[LngLat]] | None = None,
-              max_speed_mps: float | None = None) -> Route | None:
+              max_speed_mps: float | None = None, access: str = "dry") -> Route | None:
         """Fastest convoy route from a to b. `avoid` polygons (rings of (lng, lat)) make the
-        edges touching them prohibitively expensive (still used if there is no way around)."""
+        edges touching them prohibitively expensive (still used if there is no way around).
+        `access` ("dry" | "none"): see `_assemble`."""
         inv_speed, vmax = self._speeds(max_speed_mps)
         s, _ = self.nearest_node(a)
         t, _ = self.nearest_node(b)
@@ -376,10 +385,11 @@ class RoadNet:
         path = self._astar(s, t, inv_speed, vmax, av)
         if path is None:
             return None
-        return self._assemble(a, b, s, t, path, inv_speed, min(ACCESS_SPEED_MPS, vmax))
+        return self._assemble(a, b, s, t, path, inv_speed, min(ACCESS_SPEED_MPS, vmax), access)
 
     def random_loop(self, seed: int, start: LngLat, length_m: float) -> Route:
-        """Deterministic roaming loop on the network that returns to `start`.
+        """Deterministic roaming loop on the network that returns to the node nearest `start` (the loop never
+        leaves the network, so a start point off the streets, even in water, is harmless).
         Random walk (seeded) preferring unvisited edges, avoiding U-turns and favouring going
         straight on, until the walked distance plus the remaining way home reaches ~length_m;
         then the fastest path back. Same seed, start and length -> identical route."""
@@ -432,7 +442,7 @@ class RoadNet:
             heading = ((pts[-1][0] - pts[-2][0]) * k, pts[-1][1] - pts[-2][1])
             cur, prev_e = v, e
         back = self._astar(cur, s, inv_speed, vmax, None) or []
-        r = self._assemble(start, start, s, s, walk + back, inv_speed, ACCESS_SPEED_MPS)
+        r = self._assemble(start, start, s, s, walk + back, inv_speed, ACCESS_SPEED_MPS, access="none")
         r.coords[-1] = r.coords[0]
         return r
 
@@ -771,6 +781,144 @@ _lock = threading.Lock()
 _cache: dict[str, object] = {}
 
 
+class LandMask:
+    """Where the ground is dry: every OSM water polygon (sea, lakes, rivers, ponds, docks) over Sweden at ~110 m,
+    falling back to the sea mask outside the covered tiles. Placement of anything that stands or drives on the
+    ground goes through `is_dry` / `nearest_dry` / `fits`."""
+
+    def __init__(self, path: Path, sea: "SeaNet | None" = None):
+        raw = path.read_bytes()
+        if raw[:8] != b"TROSLND1":
+            raise ValueError(f"{path} is not a TrossOps land mask")
+        (hlen,) = struct.unpack("<I", raw[8:12])
+        hdr = json.loads(raw[12:12 + hlen].decode("utf-8"))
+        o = 12 + hlen
+        wz, kz = hdr["water"]["zlen"], hdr["known"]["zlen"]
+        self.header = hdr
+        self.source: str = hdr.get("source", "")
+        self.water = zlib.decompress(raw[o:o + wz])
+        self.known = zlib.decompress(raw[o + wz:o + wz + kz])
+        self.lng0, self.lat0, self.lng1, self.lat1 = hdr["bbox"]
+        self.w, self.h, self.dlng, self.dlat = hdr["w"], hdr["h"], hdr["dlng"], hdr["dlat"]
+        self.sea = sea
+        self._roads: dict[str, set[int]] = {}
+
+    def cell(self, p: LngLat) -> int:
+        """Grid cell id of p (-1 outside the grid)."""
+        c = int((p[0] - self.lng0) / self.dlng)
+        r = int((self.lat1 - p[1]) / self.dlat)
+        return r * self.w + c if 0 <= c < self.w and 0 <= r < self.h and p[0] >= self.lng0 and p[1] <= self.lat1 else -1
+
+    def road_cells(self, net: "RoadNet", step_m: float = 35.0) -> set[int]:
+        """Cells a road of `net` passes through (rasterised once per network, ~1 s for the national graph)."""
+        hit = self._roads.get(net.name)
+        if hit is None:
+            hit = set()
+            for e in range(len(net.elen)):
+                pts = net.edge_coords(e)
+                for a, b in zip(pts, pts[1:]):
+                    n = max(1, int(_fast_m(a[0], a[1], b[0], b[1]) / step_m))
+                    for k in range(n + 1):
+                        c = self.cell((a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n))
+                        if c >= 0:
+                            hit.add(c)
+            self._roads[net.name] = hit
+        return hit
+
+    def is_water(self, p: LngLat) -> bool:
+        c = int((p[0] - self.lng0) / self.dlng)
+        r = int((self.lat1 - p[1]) / self.dlat)
+        if 0 <= c < self.w and 0 <= r < self.h and p[0] >= self.lng0 and p[1] <= self.lat1:
+            i = r * self.w + c
+            if (self.known[i >> 3] >> (i & 7)) & 1:
+                return bool((self.water[i >> 3] >> (i & 7)) & 1)
+        return bool(self.sea and self.sea.is_water(p))
+
+    def is_dry(self, p: LngLat) -> bool:
+        return not self.is_water(p)
+
+    def fits(self, pts: list[LngLat]) -> bool:
+        return all(not self.is_water(q) for q in pts)
+
+    def leg_dry(self, a: LngLat, b: LngLat, step_m: float = 50.0) -> bool:
+        """True when the straight line a-b stays on dry ground (sampled every step_m)."""
+        n = max(1, int(haversine_m(a, b) / step_m))
+        return all(not self.is_water((a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n)) for k in range(n + 1))
+
+    def nearest_dry(self, p: LngLat, max_m: float = 20_000.0, clearance_m: float = 0.0, blocked: set[int] | None = None) -> LngLat | None:
+        """Closest point to p (searched on rings every ~half a cell) that is dry and not in a `blocked` cell (e.g.
+        road cells), with `clearance_m` of dry ground around it when asked. p itself when it already qualifies;
+        None if nothing within max_m."""
+        # judged on the coordinate as stored (6 decimals): a point on a cell edge must not flip cells when rounded
+        def ok(q: LngLat) -> bool:
+            if self.is_water(q) or (blocked and self.cell(q) in blocked):
+                return False
+            return clearance_m <= 0 or all(not self.is_water(_offset(q, b, clearance_m)) for b in range(0, 360, 45))
+        p = (round(p[0], 6), round(p[1], 6))
+        if ok(p):
+            return p
+        step = 55.0
+        r = step
+        while r <= max_m:
+            n = max(8, int(2 * math.pi * r / step))
+            for k in range(n):
+                q = _offset(p, 360.0 * k / n, r)
+                q = (round(q[0], 6), round(q[1], 6))
+                if ok(q):
+                    return q
+            r += step
+        return None
+
+    def candidates(self, center: LngLat, samples: list[LngLat], max_m: float = 15_000.0, step_m: float = 120.0,
+                   wet: list[LngLat] | None = None, blocked: set[int] | None = None, sea: list[LngLat] | None = None):
+        """Shifts (east m, north m) of a rigid shape, nearest first, for which every `samples` point is dry and
+        outside the `blocked` cells (roads), every `wet` point is water (berths) and every `sea` point is navigable
+        sea (a channel). Callers re-check the shape actually rebuilt at the shifted centre and take the first."""
+        k = math.cos(math.radians(center[1]))
+
+        def shifted(pts, de, dn):
+            return [(q[0] + de / (M_PER_DEG * k), q[1] + dn / M_PER_DEG) for q in pts]
+
+        def good(de, dn):
+            if wet and not all(self.is_water(q) for q in shifted(wet, de, dn)):
+                return False
+            if sea and not all(self.wet_ok(q, True) for q in shifted(sea, de, dn)):
+                return False
+            return self.dry_ok(shifted(samples, de, dn), blocked)
+        if good(0.0, 0.0):
+            yield (0.0, 0.0)
+        r = step_m
+        while r <= max_m:
+            n = max(12, int(2 * math.pi * r / step_m))
+            for j in range(n):
+                a = 2 * math.pi * j / n
+                de, dn = r * math.sin(a), r * math.cos(a)
+                if good(de, dn):
+                    yield (de, dn)
+            r += step_m
+
+    def dry_ok(self, pts: list[LngLat], blocked: set[int] | None = None) -> bool:
+        return not any(self.is_water(q) or (blocked and self.cell(q) in blocked) for q in pts)
+
+    def wet_ok(self, q: LngLat, sea_only: bool = False) -> bool:
+        return self.is_water(q) and (not sea_only or self.sea is None or self.sea.is_water(q))
+
+    def shift(self, center: LngLat, de: float, dn: float) -> LngLat:
+        return (center[0] + de / (M_PER_DEG * math.cos(math.radians(center[1]))), center[1] + dn / M_PER_DEG)
+
+
+def _offset(p: LngLat, bearing_deg: float, dist_m: float) -> LngLat:
+    a = math.radians(bearing_deg)
+    return (p[0] + dist_m * math.sin(a) / (M_PER_DEG * math.cos(math.radians(p[1]))), p[1] + dist_m * math.cos(a) / M_PER_DEG)
+
+
+def _land_or_none() -> "LandMask | None":
+    try:
+        return land()
+    except (OSError, ValueError):  # mask not built: behave as before (access legs kept)
+        return None
+
+
 def _load_roadnet(name: str, path: Path) -> RoadNet:
     with gzip.open(path, "rb") as fh:
         doc = json.loads(fh.read())
@@ -808,3 +956,9 @@ def city(name: str) -> RoadNet:
 def sea() -> SeaNet:
     """Sea mask and ship routing grid."""
     return _cached("sea", lambda: SeaNet(DATA_DIR / "sea.bin"))
+
+
+def land() -> LandMask:
+    """Land/water mask (lakes and rivers included) for placing sites and ground units."""
+    sea_net = sea()  # outside _cached: the cache lock is not re-entrant
+    return _cached("land", lambda: LandMask(DATA_DIR / "land.bin", sea_net))
