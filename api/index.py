@@ -5,4 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from app.main import app  # noqa: E402  (ASGI app discovered by the Vercel Python runtime)
+import time  # noqa: E402
+
+_t0 = time.perf_counter()
+from app.main import BOOT, app  # noqa: E402  (ASGI app discovered by the Vercel Python runtime)
+
+BOOT["importS"] = round(time.perf_counter() - _t0, 2)  # whole backend import incl. FastAPI and the world build

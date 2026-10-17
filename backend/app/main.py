@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
@@ -43,7 +44,11 @@ def _epoch_from_env(speed: float, start_s: float):
 _speed = float(os.environ.get("TROSSOPS_CLOCK_SPEED", "1"))
 _start_s = float(os.environ.get("TROSSOPS_START_S", "0"))
 _db = Path(os.environ["TROSSOPS_DB_PATH"]) if os.environ.get("TROSSOPS_DB_PATH") else (Path("/tmp/trossops.sqlite") if os.environ.get("VERCEL") else default_db)
+_t_engine = time.perf_counter()
 engine = Engine(_db, speed=_speed, start_s=_start_s, epoch=_epoch_from_env(_speed, _start_s))
+# cold-start diagnostics (serverless): how long the world took and whether the committed route cache covered it
+BOOT = {"engineS": round(time.perf_counter() - _t_engine, 2), "routeCacheEntries": len(engine.world.orbat.cache.data),
+        "routeCacheMissed": bool(engine.world.orbat.cache.dirty), "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
 weather = WeatherService()
 
 app = FastAPI(title="TrossOps National Scene API", version=API_VERSION)
@@ -130,7 +135,7 @@ except ImportError:  # pragma: no cover - feeds package not installed in this bu
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "working", "mode": "synthetic", "apiVersion": API_VERSION, "clock": engine.clock(), "rules": len(rules.RULES),
-            "entities": len(engine.world.entities), "formations": len(engine.world.formations), "feeds": live_router is not None}
+            "entities": len(engine.world.entities), "formations": len(engine.world.formations), "feeds": live_router is not None, "boot": BOOT}
 
 
 @app.get("/api/clock")
