@@ -507,6 +507,24 @@ def r16(ctx: Context, fx: Effects) -> None:
         intervention(ctx, fx, f"iv-R16-{sid}", a, f"Deny UAS reconnaissance of {site.label}", p, opts)
 
 
+@rule("R18", "GNSS interference")
+def r18(ctx: Context, fx: Effects) -> None:
+    """Reports of GNSS jamming or spoofing degrade navigation for every air and sea platform inside the area."""
+    for i in ctx.inputs:
+        if not ({"gnss", "spoofing"} & set(i.tags)) or not i.position:
+            continue
+        p = (i.position.longitudeDeg, i.position.latitudeDeg)
+        r = i.radiusM or 100_000
+        affected = [e for e in ctx.entities.values() if e.domain in ("air", "sea") and e.affiliation in ("own", "civil") and pos(e) and geo.haversine_m(pos(e), p) <= r]  # type: ignore[arg-type]
+        for e in affected:
+            st = fx.entity_status.setdefault(e.id, {"notes": []})
+            st["readinessDelta"] = st.get("readinessDelta", 0) - 0.08
+            st["notes"].append(f"GNSS degraded: {i.title}")
+        fx.attention.append(Contribution(p[0], p[1], r, SEVERITY_WEIGHT[i.severity] * 0.9, i.title, i.id, "R18"))
+        alert(fx, ctx, f"al-R18-{i.id}", i.severity, i.title, i.text + f" {len(affected)} own or civil air/sea platforms inside the area; inertial or terrestrial navigation advised.",
+              "R18", [i.id], [e.id for e in affected][:40], ["analysis.gnss", "air.fighter", "sea.combat"], p)
+
+
 AIS_DARK_WINDOW = (900.0, 1500.0, 1800.0)  # scripted: the suspect tanker stops transmitting 900–1500 s into every 30 min
 
 

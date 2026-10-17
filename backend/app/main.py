@@ -234,6 +234,24 @@ def plan_commit(body: PlanCommitIn) -> dict:
         raise HTTPException(404, "Entity not found") from None
 
 
+class InjectIn(BaseModel):
+    preset: str
+
+
+@app.get("/api/scenario/presets")
+def scenario_presets() -> dict:
+    from . import scenario
+    return {"presets": [{"id": k, "label": v} for k, v in scenario.PRESETS.items()]}
+
+
+@app.post("/api/scenario/inject")
+def scenario_inject(body: InjectIn) -> dict:
+    try:
+        return engine.inject(body.preset)
+    except KeyError:
+        raise HTTPException(404, "Unknown preset") from None
+
+
 @app.post("/api/plan/{entity_id}/cancel")
 def plan_cancel(entity_id: str) -> dict:
     return engine.cancel_plan(entity_id)

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import attention, inputs as inputs_mod, motion, optimize, rules, views
+from . import attention, inputs as inputs_mod, motion, optimize, rules, scenario, views
 from .inputs import SEVERITY_RANK
 from .models import Alert, EventIn, InputIn, InputReport, Intervention, PredictedPath, Readiness, SceneEntity
 from .world import MODEL_VERSION, SCENARIO_ID, SyntheticWorld, score
@@ -49,6 +49,8 @@ class Engine:
         self.commits: dict[str, dict] = {}
         self.acks: set[str] = set()
         self.plans: dict[str, dict] = {}  # entityId -> {"motion": MotionSpec, "plan": api dict}
+        self.injected: list[InputReport] = []
+        self.last_injection = ""
         self.listeners: list = []
         self.external_inputs = lambda t: []  # real public feeds turned into inputs (wired by main)
         self._cache: tuple[tuple[int, int], Evaluation] | None = None
@@ -117,6 +119,14 @@ class Engine:
                                      fuel_start=payload.get("fuelStart"), fuel_burn_per_km=payload.get("fuelBurnPerKm", 0.0))
             self.plans[payload["entityId"]] = {"motion": spec, "plan": {**payload, "worldRevision": revision, "recordedAt": recorded_at}}
             self.catalog_revision += 1
+        elif kind == "inject":
+            inj = scenario.build(payload["preset"], payload["atS"], revision, self.epoch, self.speed, self.world.sites)
+            self.injected.extend(inj.inputs)
+            for node in inj.tracks:
+                self.world.add_node(node)
+            if inj.tracks:
+                self.catalog_revision += 1
+            self.last_injection = inj.message
         elif kind == "plan_cancel":
             if self.plans.pop(payload["entityId"], None):
                 self.catalog_revision += 1
@@ -158,6 +168,13 @@ class Engine:
             if alert_id not in self.acks:
                 self._persist("ack", {"alertId": alert_id})
             return {"worldRevision": self.revision}
+
+    def inject(self, preset: str) -> dict:
+        with self.lock:
+            if preset not in scenario.PRESETS:
+                raise KeyError(preset)
+            self._persist("inject", {"preset": preset, "atS": round(self.now_s(), 1)})
+            return {"worldRevision": self.revision, "catalogRevision": self.catalog_revision, "message": self.last_injection}
 
     def commit_plan(self, entity_id: str, plan: dict, expected_revision: int) -> dict:
         """Replace an entity's declared motion with a planned route starting now (simulated execution)."""
@@ -220,7 +237,8 @@ class Engine:
         cutoff = self.iso_at(t)
         posted = [p for p in self.posted if p.receivedAt <= cutoff or self.speed != 1.0]
         external = self.external_inputs(t) if t >= self.now_s() - 30 else []  # real feeds only describe the present
-        allr = scripted + posted + external
+        injected = [p for p in self.injected if p.effectiveAt <= cutoff]
+        allr = scripted + posted + injected + external
         for r in allr:
             r.acknowledged = r.id in self.acks
         return sorted(allr, key=lambda r: r.effectiveAt)

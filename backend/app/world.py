@@ -67,6 +67,14 @@ class SyntheticWorld:
                 self.formations[n.parent].children.append(n.id)
         self.areas = self._areas()
 
+    def add_node(self, n: Node) -> None:
+        """Add a platform at runtime (scenario injection); it behaves exactly like a built-in one."""
+        base = SceneEntity(id=n.id, resourceId=f"asset-{n.id}", kind=n.kind, domain=n.domain, affiliation=n.affiliation, label=n.label, modelKey=n.model,  # type: ignore[arg-type]
+                           capabilities=n.capabilities, sourceKind="observed" if n.affiliation == "unknown" else "simulated", visualPriority=4, sidc=n.sidc,
+                           layer=n.layer, short=n.short, tags=n.tags)
+        self.orbat.nodes[n.id] = n
+        self.entities[n.id] = WorldEntity(node=n, base=base, motion=n.motion, readiness=self._readiness(n))
+
     # ---- construction helpers -------------------------------------------------------------------------------------
     def _unit_label(self, n: Node) -> str | None:
         chain = []
