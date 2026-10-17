@@ -132,6 +132,38 @@ def plan(e: SceneEntity, to: tuple[float, float], predictions: list, restricted:
             "method": "score = ETA × (1 + 2 × risk); risk = threat exposure / 20 km + 0.15 per weather warning + 0.4 if fuel reserve is breached"}
 
 
+def annotate_terrain(result: dict, terrain) -> None:
+    """Attach a ground profile (Lantmäteriet Markhöjd) to every option; airborne options also get terrain clearance.
+    Never raises: a terrain failure only adds a note to `basedOn`."""
+    for o in result["options"]:
+        coords = [(p[0], p[1]) for p in o["path"]]
+        try:
+            if o["airborne"]:
+                pts = coords if len(coords) <= 400 else coords[:: math.ceil(len(coords) / 400)] + [coords[-1]]
+                alts = o["path"] if len(coords) <= 400 else o["path"][:: math.ceil(len(coords) / 400)] + [o["path"][-1]]
+                ground = terrain.elevations(pts)
+                clear = [None if g is None or v[2] is None else v[2] - g for v, g in zip(alts, ground)]
+                # take-off and landing legs sit on the ground by design: judge clearance on the cruise portion only
+                inner = [c for c in clear[1:-1] if c is not None]
+                cmin = round(min(inner)) if inner else None
+                valid = [g for g in ground if g is not None]
+                o["terrain"] = {"groundM": ground, "minM": min(valid) if valid else None, "maxM": max(valid) if valid else None, "minClearanceM": cmin}
+                if cmin is not None and cmin < 150:
+                    o["notes"].append(f"Terrain clearance only {cmin} m (Lantmäteriet elevation)")
+                    o["risk"] = round(min(1.0, o["risk"] + 0.25), 2)
+                o["basedOn"].append(f"terrain clearance ≥ {cmin} m over the national elevation model (Lantmäteriet)")
+            else:
+                prof = terrain.profile(coords, 160)
+                o["terrain"] = {k: prof[k] for k in ("distanceM", "groundM", "minM", "maxM", "climbM")}
+                if prof["maxM"] is not None:
+                    o["basedOn"].append(f"terrain {prof['minM']:.0f}–{prof['maxM']:.0f} m, total climb {prof['climbM']} m (Lantmäteriet)")
+        except Exception as exc:  # noqa: BLE001
+            o["basedOn"].append(f"terrain unavailable: {str(exc)[:80]}")
+    for o in result["options"]:
+        o["score"] = round(o["etaMin"] * (1 + 2 * o["risk"]), 1)
+    result["recommended"] = min(result["options"], key=lambda o: (not o["feasible"], o["score"]))["id"]
+
+
 def _road_speeds(coords: list[tuple[float, float]], duration_s: float, cap: float) -> list[float]:
     total = _length(coords)
     avg = min(cap, total / max(duration_s, 1))

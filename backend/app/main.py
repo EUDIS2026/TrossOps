@@ -219,6 +219,9 @@ def plan_route(body: PlanIn) -> dict:
         except ImportError:
             incidents = []
         result = planner.plan(e, (body.to[0], body.to[1]), ev.fx.predictions, restricted, warnings, incidents)
+        from .feeds import MARKHOJD
+        if MARKHOJD.available():
+            planner.annotate_terrain(result, MARKHOJD)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     return {**result, "worldRevision": engine.revision, "atS": round(ev.t, 1)}
