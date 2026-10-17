@@ -284,7 +284,10 @@ export class SceneController {
     const w = this.session.world
     if (!w || this.map.getZoom() < 10.8) return
     const b = this.map.getBounds()
-    const want = w.catalog.sites.filter(si => b.contains([si.center[0], si.center[1]]) || this.layouts.has(si.id)).filter(si => !this.layouts.has(si.id)).slice(0, 6)
+    // any site whose footprint touches the (slightly padded) viewport, not only those whose centre is visible
+    const pad = 0.02, W = b.getWest() - pad, E = b.getEast() + pad, S = b.getSouth() - pad, N = b.getNorth() + pad
+    const touches = (fp: number[][]) => fp.some(p => p[0] >= W && p[0] <= E && p[1] >= S && p[1] <= N) || (fp.length > 0 && Math.min(...fp.map(p => p[0])) <= W && Math.max(...fp.map(p => p[0])) >= E && Math.min(...fp.map(p => p[1])) <= S && Math.max(...fp.map(p => p[1])) >= N)
+    const want = w.catalog.sites.filter(si => !this.layouts.has(si.id) && (touches(si.footprint) || b.contains([si.center[0], si.center[1]]))).slice(0, 6)
     await Promise.all(want.map(async si => {
       this.layouts.set(si.id, 'loading')
       try { this.layouts.set(si.id, await api.layout(si.id)); this.layoutsDirty = true } catch { this.layouts.delete(si.id) }
@@ -389,7 +392,7 @@ export class SceneController {
       const isSite = e.kind === 'facility' || e.kind === 'infrastructure'
       const leafModel = models3d && !it.aggregate && !isSite && !!e.model && zoom >= modelZoomFor(e.model)
       const cond = it.aggregate ? COND[n.worst] ?? 'normal' : (n.status?.[0] ?? 'normal')
-      const size = (it.aggregate ? ECHELON_PX[e.echelon ?? 'company'] ?? 48 : isSite ? 52 : 46) * zs * (isSite && zoom > 13.5 ? 0.7 : 1)
+      const size = (it.aggregate ? ECHELON_PX[e.echelon ?? 'company'] ?? 48 : isSite ? 52 : 46) * zs * (isSite && (zoom > 13.5 || zoom < 6.5) ? 0.72 : 1)
       const mx = mercX(it.lng), my = mercY(it.lat)
       const alt = !it.aggregate && n.pose.alt && n.pose.alt > 0 ? n.pose.alt : null
       const selected = sel?.id === e.id
@@ -490,6 +493,7 @@ export class SceneController {
       const e = it.node.e
       const isSite = e.kind === 'facility' || e.kind === 'infrastructure'
       if (!it.aggregate && !isSite && zoom < 9 && s.selected?.id !== e.id && e.affiliation !== 'unknown') continue
+      if (isSite && zoom < 6.5 && !/^(airbase|navbase)/.test(e.id) && s.selected?.id !== e.id) continue
       const text = it.aggregate ? `${e.short ?? e.label} · ${it.count}` : isSite ? e.label : zoom >= 12 ? e.label : (e.short ?? e.label)
       feats.push({ type: 'Feature', properties: { text, agg: it.aggregate, rank: it.aggregate ? 0 : isSite ? 1 : 2, color: AFF_LABEL[e.affiliation] ?? '#dfe6ec' }, geometry: { type: 'Point', coordinates: [it.lng, it.lat] } })
     }
