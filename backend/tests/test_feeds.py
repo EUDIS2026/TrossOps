@@ -194,6 +194,74 @@ def test_adsb_staggers_circles_after_cold_start_and_reports_rate_limit():
     assert "paused" in feeds.ADSB.get()["lastError"]
 
 
+def test_adsb_rate_limit_pause_doubles_with_jitter_and_resets(monkeypatch):
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr(adsb.time, "time", lambda: clock["t"])
+    monkeypatch.setattr(adsb.random, "uniform", lambda lo, hi: hi)  # worst-case jitter: +25 %
+    state = {"code": 429}
+    calls: list = []
+    feeds.ADSB.transport = mock([("api.adsb.lol", lambda r: httpx.Response(state["code"], json=fixture("adsb_lol.json")))], calls)
+    pauses = []
+    for _ in range(5):
+        feeds.ADSB.refresh(force=True)
+        pauses.append(round(feeds.ADSB._cooldown_until - clock["t"], 1))
+        clock["t"] = feeds.ADSB._cooldown_until + 0.1
+    assert pauses == [37.5, 75.0, 150.0, 300.0, 300.0]  # 30 s doubling, capped at 240 s, x1.25 jitter
+    state["code"] = 200
+    feeds.ADSB.refresh(force=True)
+    assert feeds.ADSB._rate_limit_strikes == 0 and feeds.ADSB.get()["status"] == "working"
+    state["code"] = 420
+    feeds.ADSB.refresh(force=True)
+    assert feeds.ADSB._cooldown_until - clock["t"] == 37.5  # back to the first step after a success
+
+
+def test_opensky_cloud_block_is_detected_fast_and_explained(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("OPENSKY_CLIENT_ID", "id")
+    monkeypatch.setenv("OPENSKY_CLIENT_SECRET", "secret")
+    timeouts: list = []
+    calls: list = []
+
+    def lol(request):
+        if "/lat/60.5/" in str(request.url):
+            return httpx.Response(420, text="slow down")
+        return httpx.Response(200, json=fixture("adsb_lol.json"))
+
+    def dropped(request):
+        timeouts.append(request.extensions["timeout"]["connect"])
+        raise httpx.ConnectTimeout("timed out", request=request)
+
+    feeds.ADSB.transport = mock([("api.adsb.lol", lol), ("opensky-network.org", dropped)], calls)
+    body = feeds.ADSB.get()
+    assert timeouts == [3.0]  # short connect timeout, not the 8 s client default
+    assert body["status"] == "partial" and body["count"] == 7
+    assert "connect timeout after 3 s from auth.opensky-network.org" in body["lastError"]
+    assert "blocks many cloud-provider address ranges" in body["lastError"]
+    calls.clear()
+    feeds.ADSB._snapshots.pop(1, None)
+    feeds.ADSB._cooldown_until = 0.0
+    feeds.ADSB.refresh(force=True)
+    assert not [c for c in calls if "opensky" in c]  # paused for 10 min: no second wait on a blocked upstream
+    assert "opensky gap fill: paused 6" in feeds.ADSB.get()["lastError"] and "cloud-provider" in feeds.ADSB.get()["lastError"]
+
+
+def test_real_network_client_retries_one_failed_connection():
+    feeds.SWPC.transport = None
+    client = feeds.SWPC.client()
+    assert isinstance(client._transport, httpx.HTTPTransport) and client._transport._pool._retries == 1
+    assert client.timeout.read == 8.0
+    feeds.SWPC.transport = mock([("swpc.noaa.gov", "swpc_kp.json")])
+    assert isinstance(feeds.SWPC.client()._transport, httpx.MockTransport)  # tests keep their injected transport
+
+
+def test_describe_reports_timeout_phase_limit_and_host():
+    from app.feeds.base import describe
+    req = httpx.Request("GET", "https://example.org/x", extensions={"timeout": {"connect": 2.5, "read": 8, "write": 8, "pool": 8}})
+    assert describe(httpx.ConnectTimeout("t", request=req)) == "connect timeout after 2.5 s from example.org"
+    assert describe(httpx.ReadTimeout("t", request=req)) == "read timeout after 8 s from example.org"
+    assert describe(httpx.ReadTimeout("t")) == "read timeout after 8 s"
+
+
 def test_adsb_falls_back_to_opensky():
     feeds.ADSB.transport = mock([("api.adsb.lol", 429), ("opensky-network.org/api/states/all", "opensky.json")])
     body = feeds.ADSB.get()
@@ -336,7 +404,7 @@ def test_aisstream_adapter_only_without_key_and_message_parsing(monkeypatch):
     monkeypatch.setenv("VERCEL", "1")
     bursts = []
 
-    def fake_burst(key):
+    def fake_burst(key, seconds=aisstream.BURST_S):
         bursts.append(key)
         stream._fetched_at = stream._last_ok = time.time()
 
@@ -346,6 +414,71 @@ def test_aisstream_adapter_only_without_key_and_message_parsing(monkeypatch):
     assert st["status"] == "working" and "serverless" in st["note"] and len(st["items"]) == 1
     stream.refresh()
     assert bursts == ["k"]  # rate-limited to one burst per BURST_EVERY_S
+
+
+class FakeWebSocket:
+    """Stands in for websockets.sync.client.connect(): yields scripted messages, then times out like a quiet stream."""
+
+    def __init__(self, messages: list[dict], log: list):
+        self.messages, self.log = list(messages), log
+
+    def __call__(self, url, **kwargs):
+        self.log.append(("connect", url))
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def send(self, text):
+        self.log.append(("send", json.loads(text)))
+
+    def recv(self, timeout=None):
+        if not self.messages:
+            raise TimeoutError
+        return json.dumps(self.messages.pop(0))
+
+
+def ais_position(mmsi: int, lng: float, lat: float, when: str) -> dict:
+    return {"MessageType": "PositionReport",
+            "MetaData": {"MMSI": mmsi, "ShipName": f"SHIP{mmsi}", "latitude": lat, "longitude": lng, "time_utc": f"{when} +0000 UTC"},
+            "Message": {"PositionReport": {"Cog": 90.0, "Sog": 5.0, "TrueHeading": 90, "NavigationalStatus": 0,
+                                           "Latitude": lat, "Longitude": lng, "UserID": mmsi}}}
+
+
+def test_aisstream_serverless_bursts_merge_vessels_and_report_honestly(monkeypatch):
+    monkeypatch.setenv("AISSTREAM_API_KEY", "k")
+    monkeypatch.setenv("VERCEL", "1")
+    stream = aisstream.AisStreamFeed()
+    log: list = []
+    seconds: list = []
+    real_burst = stream._burst
+    monkeypatch.setattr(stream, "_burst", lambda key, s=aisstream.BURST_S: (seconds.append(s), real_burst(key, s)))
+    now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    earlier = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(time.time() - 120))
+    stream.ws_connect = FakeWebSocket([ais_position(1, 18.0, 59.0, now), ais_position(2, 19.0, 58.0, now)], log)
+    body = stream.get()
+    assert seconds == [aisstream.BURST_FIRST_S]  # cold instance: longer first burst
+    assert log[1][1]["APIKey"] == "k" and log[1][1]["BoundingBoxes"]
+    assert body["status"] == "working" and body["count"] == 2
+    assert "2 vessels held by this instance from 1 burst(s)" in body["note"] and "do not share" in body["note"]
+    # second burst: a new vessel plus an OUT-OF-ORDER older report for vessel 1, which must not move it back
+    stream.ws_connect = FakeWebSocket([ais_position(3, 20.0, 60.0, now), ais_position(1, 10.0, 55.0, earlier)], log)
+    body = stream.get()
+    assert seconds == [aisstream.BURST_FIRST_S]  # at most one burst per BURST_EVERY_S
+    stream._last_burst = 0.0
+    body = stream.get()
+    assert seconds == [aisstream.BURST_FIRST_S, aisstream.BURST_S]
+    by_id = {v["id"]: v for v in body["items"]}
+    assert set(by_id) == {1, 2, 3} and by_id[1]["lng"] == 18.0
+    assert "from 2 burst(s)" in body["note"]
+    # a failing burst keeps the merged vessels but downgrades to partial and says why
+    stream.ws_connect = FakeWebSocket([{"error": "Api Key Is Not Valid"}], log)
+    stream._last_burst = 0.0
+    body = stream.get()
+    assert body["status"] == "partial" and body["count"] == 3 and "Api Key Is Not Valid" in body["note"]
 
 
 # ---- SMHI ---------------------------------------------------------------------------------------------------------------------
@@ -656,6 +789,25 @@ def test_markhojd_line_of_sight_finds_a_ridge(monkeypatch):
     assert high["visible"] is True and high["minClearanceM"] > 0
 
 
+def test_router_terrain_endpoints_are_honest_when_not_configured(api):
+    for path in ("/api/terrain/elevation?at=18.0,59.3", "/api/terrain/los?a=18.0,59.3&b=18.1,59.3",
+                 "/api/terrain/profile?path=18.0,59.3;18.1,59.3"):
+        r = api.get(path)
+        assert r.status_code == 503 and "terrain not configured" in r.json()["detail"], path
+
+
+def test_router_terrain_profile_along_a_path(api, monkeypatch):
+    monkeypatch.setenv("LANTMATERIET_TOKEN", "tok")
+    feeds.MARKHOJD.transport = mock(markhojd_routes(lambda e, n: 50.0 + (e - 600_000) / 1000))
+    body = api.get("/api/terrain/profile", params={"path": "15.3,62.0;15.5,62.0;15.5,62.1", "samples": 50}).json()
+    assert len(body["groundM"]) == len(body["distanceM"]) == len(body["points"]) == 50
+    assert body["distanceM"][0] == 0 and body["distanceM"][-1] > 20_000 and body["minM"] < body["maxM"]
+    assert body["points"][0] == [15.3, 62.0] and body["points"][-1] == [15.5, 62.1]
+    assert api.get("/api/terrain/profile", params={"path": "15.3,62.0"}).status_code == 422
+    assert api.get("/api/terrain/profile", params={"path": "15.3,62.0;2.0,40.0"}).status_code == 422
+    assert api.get("/api/terrain/profile", params={"path": "15.3,62.0;15.4,62.0", "samples": 1}).status_code == 422
+
+
 def test_planner_terrain_annotation_flags_low_clearance():
     from app import planner
 
@@ -687,3 +839,29 @@ def test_markhojd_basic_auth_with_geotorget_account(monkeypatch):
     feeds.MARKHOJD.transport = mock([("markhojd/v1/hojd", hojd)])
     assert feeds.MARKHOJD.get()["status"] == "working"
     assert seen == ["Basic " + base64.b64encode(b"user@example.org:pw").decode()]
+
+
+# ---- Edge cache headers -------------------------------------------------------------------------------------------------------
+def test_edge_cache_policy_follows_feed_ttl_and_status():
+    from app.feeds.base import edge_cache_header
+    assert edge_cache_header(10, "working") == "max-age=5, stale-while-revalidate=10"  # ADS-B: floor of 5 s fresh
+    assert edge_cache_header(30, "partial") == "max-age=15, stale-while-revalidate=30"
+    assert edge_cache_header(600, "working") == "max-age=300, stale-while-revalidate=600"
+    assert edge_cache_header(3600, "working") == "max-age=300, stale-while-revalidate=3600"  # capped at 5 min fresh
+    for status in ("blocked", "adapter-only", ""):
+        assert edge_cache_header(600, status) == "max-age=5"  # no data: brief, no stale serving
+
+
+def test_router_feed_endpoints_set_edge_and_browser_cache_headers(api):
+    feeds.ADSB.transport = mock([("api.adsb.lol", "adsb_lol.json")])
+    feeds.SWPC.transport = mock([("swpc.noaa.gov", 503)])
+    r = api.get("/api/live/aircraft")
+    assert r.headers["vercel-cdn-cache-control"] == "max-age=5, stale-while-revalidate=10"
+    assert r.headers["cache-control"] == "public, max-age=0, must-revalidate"  # browsers always revalidate
+    body = r.json()
+    assert body["generatedAt"] and body["ttlS"] == 10.0 and body["fetchedAt"] <= body["generatedAt"]
+    assert api.get("/api/live/gnss").headers["vercel-cdn-cache-control"].startswith("max-age=5,")
+    assert api.get("/api/env/space").headers["vercel-cdn-cache-control"] == "max-age=5"  # blocked: short, no SWR
+    assert api.get("/api/live/aircraft/7809aa/trail").status_code == 200
+    assert "vercel-cdn-cache-control" not in api.get("/api/live/aircraft/7809aa/trail").headers  # per-instance history
+    assert "vercel-cdn-cache-control" not in api.get("/api/sources?probe=false").headers

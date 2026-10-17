@@ -1,6 +1,6 @@
 import type {
   AttentionResponse, Clock, EntityDetail, FeedPayload, FormationDetail, InputReport, KinematicsTick, LiveAircraft, LiveVessel, PlanResult, RoutePlan,
-  SiteLayout, Snapshot, SourceStatus, TrackResponse, Views, WorldCatalog,
+  LineOfSight, SiteLayout, Snapshot, SourceStatus, TerrainElevation, TerrainProfile, TrackResponse, Views, WorldCatalog,
 } from '../contracts/types'
 
 export class ApiError extends Error {
@@ -24,6 +24,7 @@ const q = (params: Record<string, string | number | boolean | null | undefined>)
   return str ? `?${str}` : ''
 }
 const post = (body: unknown): RequestInit => ({ method: 'POST', body: JSON.stringify(body) })
+const ll = (p: [number, number]) => `${p[0].toFixed(5)},${p[1].toFixed(5)}`
 
 export const api = {
   views: () => request<Views>('/api/views'),
@@ -62,6 +63,12 @@ export const api = {
   space: () => request<FeedPayload<never> & { kp?: number; note?: string }>('/api/env/space'),
   police: () => request<FeedPayload<Record<string, unknown>>>('/api/civil/police'),
   crisis: () => request<FeedPayload<Record<string, unknown>>>('/api/civil/crisis'),
+  // terrain (Lantmäteriet Markhöjd Direkt): 503 while not configured, 422 outside Sweden
+  elevation: (lng: number, lat: number, signal?: AbortSignal) => request<TerrainElevation>(`/api/terrain/elevation${q({ at: ll([lng, lat]) })}`, { signal }),
+  lineOfSight: (a: [number, number], b: [number, number], ha: number, hb: number, signal?: AbortSignal) =>
+    request<LineOfSight>(`/api/terrain/los${q({ a: ll(a), b: ll(b), ha, hb })}`, { signal }),
+  terrainProfile: (path: [number, number][], samples = 200, signal?: AbortSignal) =>
+    request<TerrainProfile>(`/api/terrain/profile${q({ path: path.map(ll).join(';'), samples })}`, { signal }),
 }
 
 export type StreamHandlers = { onTick: (tick: KinematicsTick) => void; onRevision: (msg: { worldRevision: number; catalogRevision: number }) => void; onState: (state: 'connecting' | 'live' | 'offline') => void }

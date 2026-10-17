@@ -17,6 +17,7 @@ import { CinematicCamera } from './camera'
 import { ModelLayer, modelZoomFor, type ModelInstance } from './models3d'
 import { addOverlays, circleRing, DETAIL_LAYERS, empty, nightPolygon, OVERLAY_LAYERS, setData } from './overlays'
 import { SpriteLayer } from './sprites'
+import { toolCapturesMap } from './tools'
 import { WindLayer } from './windfield'
 import { halo, headingArrow, natoSymbol, palette, trafficIcon, vesselColor } from './symbols'
 import { hasTopdown, topdownImage, TOPDOWN_FILL } from './topdown'
@@ -383,7 +384,8 @@ export class SceneController {
       const snap = s.snapshot
       const pos = sel.kind === 'input' ? snap?.inputs.find(i => i.id === sel.id)?.position : null
       const a = sel.kind === 'alert' ? snap?.alerts.find(x => x.id === sel.id)?.position : null
-      const ll = pos ? [pos.longitudeDeg, pos.latitudeDeg] : a ?? (sel.data as { lng?: number; lat?: number } | undefined)?.lng !== undefined ? [(sel.data as { lng: number }).lng, (sel.data as { lat: number }).lat] : null
+      const d = sel.data as { lng?: number; lat?: number } | undefined
+      const ll = pos ? [pos.longitudeDeg, pos.latitudeDeg] : a ?? (d?.lng !== undefined && d.lat !== undefined ? [d.lng, d.lat] : null)
       if (ll) this.camera.focusPoint(ll[0], ll[1], Math.max(this.map.getZoom(), 7.5), this.map.getPitch(), rm, 0)
     } else if (sel.kind === 'area') {
       const area = s.snapshot?.areas.find(a => a.id === sel.id)
@@ -666,6 +668,7 @@ export class SceneController {
   }
 
   private onClick(e: MapMouseEvent) {
+    if (toolCapturesMap()) return // a map tool (scene/tools.ts) owns this click
     const s = store.get()
     if (s.route?.picking) { void this.session.planRoute(s.route.entityId, [e.lngLat.lng, e.lngLat.lat]); return }
     const hit = this.pick(e.point.x, e.point.y)
@@ -698,7 +701,7 @@ export class SceneController {
     this.hoverRaf = requestAnimationFrame(() => {
       this.hoverRaf = 0
       const s = store.get()
-      if (s.route?.picking) return
+      if (s.route?.picking || toolCapturesMap()) return
       const hit = this.pick(e.point.x, e.point.y)
       this.map.getCanvas().style.cursor = hit ? 'pointer' : ''
       if (!hit) { if (s.hovered) actions.hover(null); return }

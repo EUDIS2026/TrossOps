@@ -3,13 +3,22 @@ import { useEffect, useState } from 'react'
 import { actions, EMPTY, store, useApp, type InspectorTab } from '../core/store'
 import type { WNode } from '../core/world'
 import { AlertRow, InputRow } from './Dock'
-import { ago, Bar, channelLabel, Fact, fmtTime, kindLabel, NatoGlyph, pct, Ring, useRuntime } from './context'
+import { ago, Bar, channelLabel, Fact, fmtTime, kindLabel, NatoGlyph, pct, plainWord, Ring, selectionLabel, siteKindLabel, useRuntime } from './context'
 import { Icon } from './icons'
+import type { SelectionKind } from '../core/store'
 
 function Tabs({ tabs }: { tabs: [InspectorTab, string, (number | string)?][] }) {
   const tab = useApp(s => s.tab)
   const active = tabs.some(t => t[0] === tab) ? tab : tabs[0][0]
-  return <div className="tabs" role="tablist">{tabs.map(([id, label, badge]) => <button key={id} role="tab" aria-selected={active === id} onClick={() => actions.setTab(id)}>{label}{badge !== undefined && badge !== 0 && <i>{badge}</i>}</button>)}</div>
+  return <div className="tabs" role="tablist" aria-label="Details">{tabs.map(([id, label, badge]) => <button key={id} role="tab" aria-selected={active === id} onClick={() => actions.setTab(id)}>{label}{badge !== undefined && badge !== 0 && <i>{badge}</i>}</button>)}</div>
+}
+
+/** A reference to a unit, site, track or area: shows its name (id on hover) and selects it. */
+function RefChip({ id, kind, className = 'chip' }: { id: string; kind?: SelectionKind; className?: string }) {
+  const n = useRuntime()?.session.world?.get(id)
+  const k: SelectionKind = kind ?? (n ? (n.e.kind === 'formation' ? 'formation' : n.e.kind === 'facility' || n.e.kind === 'infrastructure' ? 'site' : n.e.affiliation === 'unknown' ? 'track' : 'entity')
+    : id.startsWith('unk') ? 'track' : id.startsWith('area') ? 'area' : 'entity')
+  return <button className={className} title={`${n ? `${n.e.label} · ` : ''}${id}`} onClick={() => actions.select(k, id)}>{n?.e.short ?? n?.e.label ?? id}</button>
 }
 function useTab(tabs: InspectorTab[]): InspectorTab { const t = useApp(s => s.tab); return tabs.includes(t) ? t : tabs[0] }
 
@@ -17,7 +26,7 @@ function Head({ sidc, cond, title, sub, chain }: { sidc?: string | null; cond?: 
   return <div className="ent-head">
     {sidc !== undefined ? <NatoGlyph sidc={sidc} condition={(cond as 'normal') ?? 'normal'} size={56} /> : <span className="glyph-ph big"><Icon.target /></span>}
     <div>
-      {chain && chain.length > 0 && <div className="crumbs">{chain.slice(-3).map(c => <button key={c.e.id} onClick={() => actions.select('formation', c.e.id)}>{c.e.short ?? c.e.label}</button>)}</div>}
+      {chain && chain.length > 0 && <nav className="crumbs" aria-label="Parent formations">{chain.slice(-3).map(c => <button key={c.e.id} title={`Open ${c.e.label}`} onClick={() => actions.select('formation', c.e.id)}>{c.e.short ?? c.e.label}</button>)}</nav>}
       <h3>{title}</h3><p>{sub}</p>
     </div>
   </div>
@@ -63,11 +72,11 @@ function PredictionView({ preds, id }: { preds: PredictedPath[]; id: string }) {
     {own.map(p => <div key={p.method} className="hyp">
       <div className="hyp-head"><strong>{p.hypothesis}</strong><b>{Math.round(p.probability * 100)} %</b></div><Bar value={p.probability} tone="accent" />
       <div className="facts"><Fact k="Horizon" v={`${Math.round(p.horizonS / 60)} min`} /><Fact k="Closest own asset" v={p.etaS !== null ? `${Math.round(p.etaS / 60)} min` : 'none in horizon'} /></div>
-      {p.threatenedEntityIds.length > 0 && <div className="chips">{p.threatenedEntityIds.map(t => <button key={t} className="chip" onClick={() => actions.select('site', t)}>{t}</button>)}</div>}
+      {p.threatenedEntityIds.length > 0 && <div className="chips">{p.threatenedEntityIds.map(t => <RefChip key={t} id={t} />)}</div>}
       <small>Based on</small><ul>{p.basedOn.map(b => <li key={b}>{b}</li>)}</ul>
       <small className="quiet mono">{p.method}</small>
     </div>)}
-    {other.length > 0 && <div className="section"><h4>On the predicted path of</h4><div className="chips">{[...new Set(other.map(p => p.entityId))].map(t => <button key={t} className="chip" onClick={() => actions.select('track', t)}>{t}</button>)}</div></div>}
+    {other.length > 0 && <div className="section"><h4>On the predicted path of</h4><div className="chips">{[...new Set(other.map(p => p.entityId))].map(t => <RefChip key={t} id={t} kind="track" />)}</div></div>}
   </>
 }
 
@@ -78,12 +87,12 @@ function OptionCard({ iv, o }: { iv: Intervention; o: InterventionOption }) {
   const rec = iv.recommendedOptionId === o.id, done = iv.committedOptionId === o.id
   return <div className="option" data-recommended={rec}>
     <div className="option-head"><strong>{o.title}</strong>{done ? <span className="tag good">committed</span> : rec ? <span className="tag accent">recommended</span> : null}</div>
-    <div className="option-meta"><span>success <b>{Math.round(o.successLikelihood * 100)} %</b></span><span>effect <b>{o.etaMin === null ? '—' : `${Math.round(o.etaMin)} min`}</b></span>{o.distanceKm !== null && <span><b>{o.distanceKm}</b> km</span>}<span>risk <b>{o.riskLevel}</b></span></div>
+    <div className="option-meta"><span>success <b>{Math.round(o.successLikelihood * 100)} %</b></span><span title="Time until the effect is in place">in effect <b>{o.etaMin === null ? '—' : `${Math.round(o.etaMin)} min`}</b></span>{o.distanceKm !== null && <span><b>{o.distanceKm}</b> km</span>}<span>risk <b>{o.riskLevel}</b></span></div>
     <div className="bands">{o.outcomes.map(b => <div key={b.label} className={`band ${b.label}`} style={{ flex: Math.max(0.15, b.probability) }}><b>{Math.round(b.probability * 100)} %</b>{b.label}</div>)}</div>
     <small>{o.rationale}</small>
     <ol className="steps">{o.steps.map(s => <li key={s}>{s}</li>)}</ol>
-    <div className="actions">{o.assignedEntityIds.map(id => <button key={id} className="mini" onClick={() => actions.select('entity', id)}>{id}</button>)}
-      {!done && iv.status === 'proposed' && <button className="btn small primary" disabled={busy || sim} onClick={() => void rt?.session.commit(iv.id, o.id)}><Icon.check width={14} height={14} />Commit</button>}</div>
+    <div className="actions">{o.assignedEntityIds.map(id => <RefChip key={id} id={id} className="mini" />)}
+      {!done && iv.status === 'proposed' && <button className="btn small primary" disabled={busy || sim} title={sim ? 'Return to Live to commit' : 'Order the assigned units to carry out this option'} onClick={() => void rt?.session.commit(iv.id, o.id)}><Icon.check width={14} height={14} />Commit</button>}</div>
   </div>
 }
 
@@ -166,14 +175,14 @@ function PlatformView({ n }: { n: WNode }) {
   const tab = useTab(tabs)
   const alerts = d?.alerts ?? []
   return <>
-    <Head sidc={e.sidc} cond={n.status?.[0]} title={e.label} sub={`${e.platform ?? kindLabel[e.kind]}${e.siteId ? ` · based ${e.siteId}` : ''}`} chain={chain} />
+    <Head sidc={e.sidc} cond={n.status?.[0]} title={e.label} sub={`${e.platform ?? kindLabel[e.kind]}${e.siteId ? ` · home site ${rt?.session.world?.get(e.siteId)?.e.label ?? e.siteId}` : ''}`} chain={chain} />
     <div className="tags">
-      <span className={`tag ${e.affiliation}`}>{e.affiliation.replace('_', ' ')}</span>
-      {n.status && n.status[0] !== 'normal' && <span className={`tag ${n.status[0] === 'unavailable' ? 'crit' : 'warn'}`}>{n.status[0]}</span>}
-      <span className="tag">{e.sourceKind}</span>
-      {p.phase !== 'static' && <span className="tag">{p.phase}</span>}
-      {deception && deception.probability >= 0.5 && <span className="tag crit">deception {deception.band}</span>}
-      {e.tags.filter(t => !t.includes(':') && t !== e.siteId).slice(0, 3).map(t => <span key={t} className="tag">{t.replace(/_/g, ' ')}</span>)}
+      <span className={`tag ${e.affiliation}`} title="Affiliation">{e.affiliation.replace('_', ' ')}</span>
+      {n.status && n.status[0] !== 'normal' && <span className={`tag ${n.status[0] === 'unavailable' ? 'crit' : 'warn'}`} title="Condition">{n.status[0]}</span>}
+      <span className="tag" title="Where this data comes from">{e.sourceKind}</span>
+      {p.phase !== 'static' && <span className="tag" title="Current activity">{p.phase.replace(/_/g, ' ')}</span>}
+      {deception && deception.probability >= 0.5 && <span className="tag crit">possible deception · {deception.band}</span>}
+      {e.tags.filter(t => !t.includes(':') && t !== e.siteId).slice(0, 3).map(t => <span key={t} className="tag">{plainWord(t)}</span>)}
     </div>
     <Tabs tabs={tabs.map(t => [t, { overview: 'Overview', fusion: 'Why', prediction: 'Prediction', deception: 'Deception', actions: 'Actions' }[t as 'overview'], t === 'actions' ? alerts.length : undefined] as [InspectorTab, string, number?])} />
     {tab === 'overview' && <>
@@ -188,10 +197,10 @@ function PlatformView({ n }: { n: WNode }) {
         {(e.domain === 'air' || p.alt) && <Fact k="Altitude" v={p.alt ? `${Math.round(p.alt)} m MSL · FL${Math.round(p.alt / 30.48)}` : 'on ground'} />}
         {e.domain === 'air' && p.alt ? <Fact k="Attitude" v={`pitch ${p.pitch.toFixed(0)}° · bank ${p.bank.toFixed(0)}°`} /> : null}
         <Fact k="Position" v={`${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`} />
-        {e.rangeKm && <Fact k="Reach" v={`${e.rangeKm} km`} />}
+        {e.rangeKm && <Fact k="Range" v={`${e.rangeKm} km`} />}
       </div>
       {r && (r.faults.length > 0 || r.notes.length > 0) && <div className="section"><h4>Faults and notes</h4><div className="list">{[...r.faults, ...r.notes].map(f => <div key={f} className="note">{f}</div>)}</div></div>}
-      {e.capabilities.length > 0 && <div className="chips">{e.capabilities.map(c => <span key={c} className="chip static">{c.replace(/_/g, ' ')}</span>)}</div>}
+      {e.capabilities.length > 0 && <div className="chips" aria-label="Capabilities">{e.capabilities.map(c => <span key={c} className="chip static">{plainWord(c)}</span>)}</div>}
       {d?.plan && <div className="note accent">Executing committed plan "{d.plan.label}" since {fmtTime(d.plan.recordedAt)}.</div>}
     </>}
     {tab === 'fusion' && <FusionView f={fusion ?? d?.fusion} />}
@@ -199,10 +208,10 @@ function PlatformView({ n }: { n: WNode }) {
     {tab === 'deception' && <DeceptionView d={deception ?? d?.deception} />}
     {tab === 'actions' && <>
       <div className="actions">
-        <button className="btn" aria-pressed={follow} onClick={() => actions.toggleFollow()}><Icon.target width={14} height={14} />{follow ? 'Following' : 'Follow'}</button>
+        <button className="btn" aria-pressed={follow} title="Keep the camera on this unit (F)" onClick={() => actions.toggleFollow()}><Icon.target width={14} height={14} />{follow ? 'Following' : 'Follow'}</button>
         {e.affiliation === 'own' && <>
-          {n.status?.[0] !== 'unavailable' ? <button className="btn danger" disabled={busy || sim} onClick={() => void rt?.session.event(e.id, 'fault')}>Record fault</button> : <button className="btn" disabled={busy || sim} onClick={() => void rt?.session.event(e.id, 'repair')}>Record repair</button>}
-          <button className="btn" disabled={busy || sim} onClick={() => void rt?.session.event(e.id, 'resupply')}>Resupply</button>
+          {n.status?.[0] !== 'unavailable' ? <button className="btn danger" disabled={busy || sim} title={sim ? 'Return to Live to record events' : 'Mark this unit unavailable; the rules re-run'} onClick={() => void rt?.session.event(e.id, 'fault')}>Record fault</button> : <button className="btn" disabled={busy || sim} title={sim ? 'Return to Live to record events' : 'Mark this unit available again'} onClick={() => void rt?.session.event(e.id, 'repair')}>Record repair</button>}
+          <button className="btn" disabled={busy || sim} title={sim ? 'Return to Live to record events' : 'Refill fuel and ammunition'} onClick={() => void rt?.session.event(e.id, 'resupply')}>Resupply</button>
         </>}
         {d?.plan && <button className="btn" disabled={busy} onClick={() => void rt?.session.cancelPlan(e.id)}>Cancel plan</button>}
       </div>
@@ -223,14 +232,14 @@ function FormationView({ n }: { n: WNode }) {
   const tab = useTab(['overview', 'units', 'actions'])
   const chain = w?.chain(n) ?? []
   return <>
-    <Head sidc={n.e.sidc} cond={['normal', 'degraded', 'unknown', 'unavailable'][n.worst]} title={n.e.label} sub={`${n.e.echelon ?? 'formation'} · ${n.count} platforms in view layers`} chain={chain} />
+    <Head sidc={n.e.sidc} cond={['normal', 'degraded', 'unknown', 'unavailable'][n.worst]} title={n.e.label} sub={`${n.e.echelon ?? 'formation'} · ${n.count} platforms in the layers shown`} chain={chain} />
     <Tabs tabs={[['overview', 'Overview'], ['units', 'Units', n.children.length], ['actions', 'Alerts', d?.alerts.length]]} />
     {tab === 'overview' && <>
       {d && <div className="readiness">{d.readiness !== null && <Ring score={d.readiness} />}<div className="facts">
         <Fact k="Platforms" v={d.platforms} /><Fact k="Moving" v={d.moving} /><Fact k="Fuel (mean)" v={pct(d.fuel)} /><Fact k="Unavailable" v={d.unavailable} tone={d.unavailable ? 'crit' : ''} /><Fact k="Degraded" v={d.degraded} tone={d.degraded ? 'warn' : ''} />
       </div></div>}
       {d && <div className="section"><h4>Composition</h4>{Object.entries(d.byPlatform).sort((a, b) => b[1] - a[1]).map(([k, v]) => <div key={k} className="comp"><span>{k}</span><b>{v}</b></div>)}</div>}
-      <div className="actions"><button className="btn" onClick={() => actions.select('formation', n.e.id)}>Frame on map</button></div>
+      <div className="actions"><button className="btn" title="Zoom the map to all its platforms" onClick={() => actions.select('formation', n.e.id)}>Show all on map</button></div>
     </>}
     {tab === 'units' && <div className="list">{n.children.map(c => <button key={c.e.id} className="item" onClick={() => actions.select(c.leaf ? (c.e.affiliation === 'unknown' ? 'track' : 'entity') : 'formation', c.e.id)}>
       <NatoGlyph sidc={c.e.sidc} size={30} /><span><strong>{c.e.label}</strong><small>{c.leaf ? c.e.platform : `${c.count} platforms${c.moving ? ` · ${c.moving} moving` : ''}`}</small></span></button>)}</div>}
@@ -257,19 +266,20 @@ function SiteView({ n }: { n: WNode }) {
   const tanks = feats.filter(f => f.properties?.cls === 'fuel_tank').map(f => f.properties!.fill as number)
   const r = d?.entity.readiness
   return <>
-    <Head sidc={n.e.sidc} cond={n.status?.[0]} title={n.e.label} sub={`${n.e.tags[0] ?? 'site'} · ${n.e.tags[1] ?? ''}`} />
+    <Head sidc={n.e.sidc} cond={n.status?.[0]} title={n.e.label} sub={[siteKindLabel[n.e.tags[0] ?? ''] ?? 'Site', n.e.tags[1]].filter(Boolean).join(' · ')} />
     <Tabs tabs={[['overview', 'Overview'], ['inventory', 'Inventory', based.length], ['actions', 'Alerts', d?.alerts.length]]} />
     {tab === 'overview' && <>
       {r && <div className="readiness"><Ring score={r.score} /><div className="facts"><Fact k="Personnel" v={`${r.crewPresent ?? '—'} / ${r.crewRequired ?? '—'}`} /><Fact k="Comms" v={r.commsStatus} />
         {tanks.length > 0 && <Fact k="Fuel farm" v={`${Math.round(tanks.reduce((a, b) => a + b, 0) / tanks.length)} %`} />}{r.ammunitionPct !== null && <Fact k="Ammunition" v={pct(r.ammunitionPct)} />}</div></div>}
-      {d?.layout && <div className="section"><h4>Installation</h4>
+      {d?.layout && <div className="section"><h4>Layout</h4>
         {Object.entries(d.layout.spots).map(([k, v]) => <div key={k} className="comp"><span>{k} positions</span><b>{v.length}</b></div>)}
         {tanks.length > 0 && <><small>Fuel tanks</small><div className="tanks">{tanks.map((t, i) => <div key={i} className="tank"><i style={{ height: `${t}%` }} /><span>{t}</span></div>)}</div></>}
       </div>}
       {r && r.notes.length > 0 && <div className="section"><h4>Notes</h4>{r.notes.map(x => <div key={x} className="note">{x}</div>)}</div>}
-      <small className="quiet">Layers → Site detail splits this installation into infrastructure, logistics, defence and personnel.</small>
+      <small className="quiet">Zoom in to see the site itself; Layers → Site detail splits it into infrastructure, logistics, defence and personnel.</small>
     </>}
     {tab === 'inventory' && <>
+      {!based.length && <div className="quiet empty">{d ? 'No platforms are based here.' : 'Loading…'}</div>}
       {[...groups.entries()].map(([k, g]) => <div key={k} className="comp"><span>{k}</span><b>{g.n}</b>{g.airborne > 0 && <em className="air">{g.airborne} airborne</em>}{g.away > 0 && <em>{g.away} moving</em>}</div>)}
       <div className="list">{based.slice(0, 80).map(b => <button key={b.e.id} className="item" onClick={() => actions.select('entity', b.e.id)}><NatoGlyph sidc={b.e.sidc} condition={b.status?.[0]} size={28} /><span><strong>{b.e.label}</strong><small>{b.e.platform} · {w!.poseNow(b).phase}</small></span></button>)}</div>
     </>}
@@ -283,13 +293,13 @@ function InputView({ i }: { i: InputReport }) {
   const tab = useTab(['overview', 'deception'])
   return <>
     <Head title={i.title} sub={`${channelLabel[i.channel] ?? i.channel} · ${i.author}`} />
-    <div className="tags"><span className={`tag ${i.severity}`}>{i.severity}</span><span className="tag">{i.sourceKind === 'public' || i.sourceKind === 'observed' ? 'real feed' : i.sourceKind}</span>{i.tags.slice(0, 5).map(t => <span key={t} className="tag">{t}</span>)}</div>
+    <div className="tags"><span className={`tag ${i.severity}`} title="Severity, set by rules">{i.severity}</span><span className="tag">{i.sourceKind === 'public' || i.sourceKind === 'observed' ? 'real feed' : i.sourceKind}</span>{i.tags.slice(0, 5).map(t => <span key={t} className="tag">{plainWord(t)}</span>)}</div>
     <Tabs tabs={[['overview', 'Report'], ['deception', 'Deception', dec ? `${Math.round(dec.probability * 100)}%` : undefined]]} />
     {tab === 'overview' && <>
       <div className="note body">{i.text}</div>
-      <div className="facts"><Fact k="Effective" v={fmtTime(i.effectiveAt)} /><Fact k="Location" v={i.position ? `${i.position.latitudeDeg.toFixed(3)}, ${i.position.longitudeDeg.toFixed(3)}` : 'not geolocated'} /><Fact k="Radius" v={i.radiusM ? `${(i.radiusM / 1000).toFixed(0)} km` : '—'} /></div>
-      {i.entityRefs.length > 0 && <div className="chips">{i.entityRefs.map(id => <button key={id} className="chip" onClick={() => actions.select(id.startsWith('unk') ? 'track' : id.startsWith('area') ? 'area' : 'entity', id)}>{id}</button>)}</div>}
-      {alerts.length > 0 && <div className="section"><h4>Rules that fired <span>{alerts.length}</span></h4><div className="list">{alerts.map(a => <AlertRow key={a.id} a={a} />)}</div></div>}
+      <div className="facts"><Fact k="Time" v={fmtTime(i.effectiveAt)} /><Fact k="Location" v={i.position ? `${i.position.latitudeDeg.toFixed(3)}, ${i.position.longitudeDeg.toFixed(3)}` : 'not on the map'} /><Fact k="Radius" v={i.radiusM ? `${(i.radiusM / 1000).toFixed(0)} km` : '—'} /></div>
+      {i.entityRefs.length > 0 && <div className="chips" aria-label="Mentioned">{i.entityRefs.map(id => <RefChip key={id} id={id} />)}</div>}
+      {alerts.length > 0 && <div className="section"><h4>Alerts raised <span>{alerts.length}</span></h4><div className="list">{alerts.map(a => <AlertRow key={a.id} a={a} />)}</div></div>}
     </>}
     {tab === 'deception' && <DeceptionView d={dec} />}
   </>
@@ -302,27 +312,27 @@ function AlertView({ a }: { a: Alert }) {
   const rt = useRuntime()
   const tab = useTab(['overview', 'sources', 'actions'])
   return <>
-    <Head title={a.title} sub={`${a.ruleId}${rule ? ` · ${rule.title}` : ''}`} />
+    <Head title={a.title} sub={`Rule ${a.ruleId}${rule ? ` · ${rule.title}` : ''}`} />
     <div className="tags"><span className={`tag ${a.severity}`}>{a.severity}</span>{a.acknowledged && <span className="tag">acknowledged</span>}</div>
     <Tabs tabs={[['overview', 'Overview'], ['sources', 'Why', inputs.length], ['actions', 'Options', ivs[0]?.options.length]]} />
     {tab === 'overview' && <><div className="note body">{a.detail}</div>
-      <div className="chips">{a.entityIds.slice(0, 10).map(id => <button key={id} className="chip" onClick={() => actions.select(id.startsWith('unk') ? 'track' : 'entity', id)}>{id}</button>)}</div>
-      {!a.acknowledged && <div className="actions"><button className="btn primary" onClick={() => void rt?.session.ack(a.id)}><Icon.check width={14} height={14} />Acknowledge</button></div>}</>}
-    {tab === 'sources' && <div className="list">{inputs.map(i => <InputRow key={i.id} i={i} />)}{!inputs.length && <div className="quiet">Derived from world state ({a.ruleId}), not from a report.</div>}</div>}
-    {tab === 'actions' && (ivs.length ? ivs.map(iv => <InterventionView key={iv.id} iv={iv} />) : <div className="quiet">This alert has no proposed course of action.</div>)}
+      {a.entityIds.length > 0 && <div className="chips" aria-label="Linked">{a.entityIds.slice(0, 10).map(id => <RefChip key={id} id={id} />)}</div>}
+      {!a.acknowledged && <div className="actions"><button className="btn primary" title="Mark as seen; it stays in the list, dimmed" onClick={() => void rt?.session.ack(a.id)}><Icon.check width={14} height={14} />Acknowledge</button></div>}</>}
+    {tab === 'sources' && <div className="list">{inputs.map(i => <InputRow key={i.id} i={i} />)}{!inputs.length && <div className="quiet">Raised from the state of units and tracks (rule {a.ruleId}), not from a report.</div>}</div>}
+    {tab === 'actions' && (ivs.length ? ivs.map(iv => <InterventionView key={iv.id} iv={iv} />) : <div className="quiet">No course of action is proposed for this alert; acknowledge it once it has been seen.</div>)}
   </>
 }
 
 function LiveView({ kind, item }: { kind: 'aircraft' | 'vessel'; item: LiveAircraft | LiveVessel | undefined }) {
-  if (!item) return <div className="quiet">This contact is no longer in the feed.</div>
+  if (!item) return <div className="quiet">This {kind === 'aircraft' ? 'aircraft' : 'ship'} is no longer in the live feed.</div>
   if (kind === 'aircraft') {
     const a = item as LiveAircraft
     return <>
-      <Head title={a.callsign ?? a.id.toUpperCase()} sub={`${a.type ?? 'aircraft'} · ${a.registration ?? 'unregistered'} · live ADS-B`} />
-      <div className="tags"><span className="tag">real</span>{a.military && <span className="tag warn">military-flagged</span>}{a.emergency && <span className="tag crit">{a.emergency}</span>}</div>
+      <Head title={a.callsign ?? a.id.toUpperCase()} sub={`${a.type ?? 'Aircraft'} · ${a.registration ?? 'no registration'} · live ADS-B`} />
+      <div className="tags"><span className="tag" title="Real public data">real</span>{a.military && <span className="tag warn" title="Flagged as military in the public ADS-B database">military-flagged</span>}{a.emergency && <span className="tag crit">{a.emergency}</span>}</div>
       <div className="facts">
         <Fact k="Altitude" v={a.onGround ? 'on ground' : a.altM != null ? `${Math.round(a.altM)} m · FL${Math.round(a.altM / 30.48)}` : '—'} /><Fact k="Ground speed" v={a.speedMps != null ? `${Math.round(a.speedMps * 1.944)} kt` : '—'} />
-        <Fact k="Track" v={a.headingDeg != null ? `${Math.round(a.headingDeg)}°` : '—'} /><Fact k="Vertical rate" v={a.verticalRateMps != null ? `${Math.round(a.verticalRateMps * 196.85)} ft/min` : '—'} />
+        <Fact k="Course" v={a.headingDeg != null ? `${Math.round(a.headingDeg)}°` : '—'} /><Fact k="Vertical rate" v={a.verticalRateMps != null ? `${Math.round(a.verticalRateMps * 196.85)} ft/min` : '—'} />
         <Fact k="Squawk" v={a.squawk ?? '—'} tone={['7500', '7600', '7700'].includes(a.squawk ?? '') ? 'crit' : ''} /><Fact k="Category" v={a.category ?? '—'} />
         <Fact k="GNSS integrity" v={a.nic != null ? `NIC ${a.nic} · NACp ${a.nacp}` : '—'} tone={a.nic != null && (a.nic < 7 || (a.nacp ?? 9) < 8) ? 'warn' : ''} /><Fact k="Position age" v={a.seenS != null ? `${a.seenS.toFixed(0)} s` : '—'} />
       </div>
@@ -331,8 +341,8 @@ function LiveView({ kind, item }: { kind: 'aircraft' | 'vessel'; item: LiveAircr
   }
   const v = item as LiveVessel
   return <>
-    <Head title={v.name ?? `MMSI ${v.id}`} sub={`${v.shipTypeLabel ?? 'vessel'} · live AIS`} />
-    <div className="tags"><span className="tag">real</span>{v.navStatusLabel && <span className="tag">{v.navStatusLabel}</span>}</div>
+    <Head title={v.name ?? `MMSI ${v.id}`} sub={`${v.shipTypeLabel ?? 'Ship'} · live AIS`} />
+    <div className="tags"><span className="tag" title="Real public data">real</span>{v.navStatusLabel && <span className="tag">{v.navStatusLabel}</span>}</div>
     <div className="facts">
       <Fact k="Speed" v={v.speedMps != null ? `${(v.speedMps * 1.944).toFixed(1)} kn` : '—'} /><Fact k="Course" v={v.courseDeg != null ? `${Math.round(v.courseDeg)}°` : '—'} />
       <Fact k="Destination" v={v.destination ?? '—'} /><Fact k="Call sign" v={v.callsign ?? '—'} /><Fact k="IMO" v={v.imo || '—'} /><Fact k="MMSI" v={String(v.id)} />
@@ -345,9 +355,9 @@ function LiveView({ kind, item }: { kind: 'aircraft' | 'vessel'; item: LiveAircr
 function CellView() {
   const sel = useApp(s => s.selected)
   const d = sel?.data as { cell?: { label: string; reasons: string[] }; surface?: string; unit?: string; note?: string } | undefined
-  if (!d?.cell) return <div className="quiet">This cell is no longer on the surface.</div>
+  if (!d?.cell) return <div className="quiet">This cell is no longer on the analysis layer.</div>
   return <>
-    <Head title={d.cell.label} sub={`${d.surface} surface · ${d.unit}`} />
+    <Head title={d.cell.label} sub={`${d.surface} · ${d.unit}`} />
     <div className="section"><h4>Why</h4>{d.cell.reasons.map(r => <div key={r} className="note">{r}</div>)}</div>
     <small className="quiet">{d.note}</small>
   </>
@@ -361,7 +371,7 @@ export function Inspector() {
   const rt = useRuntime()
   if (!sel) return null
   const w = ready ? rt?.session.world : null
-  let body: React.ReactNode = <div className="quiet">Loading…</div>
+  let body: React.ReactNode = <div className="quiet">{ready ? 'This item is no longer in the picture.' : 'Loading…'}</div>
   const n = w?.get(sel.id)
   if ((sel.kind === 'entity' || sel.kind === 'track') && n) body = <PlatformView n={n} />
   else if (sel.kind === 'formation' && n) body = <FormationView n={n} />
@@ -373,15 +383,16 @@ export function Inspector() {
   else if (sel.kind === 'intervention') { const iv = snap?.interventions.find(x => x.id === sel.id); if (iv) body = <><Head title={iv.title} sub="Course of action" /><InterventionView iv={iv} /></> }
   else if (sel.kind === 'cell') body = <CellView />
   else if (sel.kind === 'area') { const a = snap?.areas.find(x => x.id === sel.id); if (a) body = <><Head title={a.label} sub={a.kind.replace(/_/g, ' ')} /><div className="tags"><span className={`tag ${a.status === 'covered' ? 'good' : a.status === 'degraded' ? 'warn' : a.status === 'uncovered' ? 'crit' : ''}`}>{a.status}</span></div>
-    {(a.blockers ?? []).map(b => <div key={b} className="note">{b}</div>)}<div className="chips">{a.requires.map(r => <button key={r} className="chip" onClick={() => actions.select('entity', r)}>{r}</button>)}</div></> }
+    {(a.blockers ?? []).map(b => <div key={b} className="note">{b}</div>)}{a.requires.length > 0 && <div className="section"><h4>Needs</h4><div className="chips">{a.requires.map(r => <RefChip key={r} id={r} />)}</div></div>}</> }
   else if (sel.kind === 'police' || sel.kind === 'warning' || sel.kind === 'cable') {
     const p = sel.data as Record<string, unknown> | undefined
     body = <><Head title={String(p?.name ?? p?.event ?? p?.label ?? sel.id)} sub={sel.kind === 'police' ? `Polisen · ${p?.type ?? ''}` : sel.kind === 'warning' ? `SMHI warning · ${p?.level ?? ''} · ${p?.area ?? ''}` : 'Undersea infrastructure (approximate public route)'} />
       <div className="tags"><span className="tag">{sel.kind === 'cable' ? 'public, illustrative' : 'real feed'}</span></div>
       {sel.kind === 'police' && <PoliceDetail id={sel.id} />}</>
   }
-  return <aside className="inspector" aria-label="Inspector">
-    <div className="panel-head"><span className="kicker">{sel.kind}</span><button className="icon-button" title="Close (Esc)" onClick={() => actions.deselect()}><Icon.close /></button></div>
+  const kicker = selectionLabel[sel.kind] ?? sel.kind
+  return <aside className="inspector" aria-label={`${kicker} details`}>
+    <div className="panel-head"><span className="kicker">{kicker}</span><button className="icon-button" title="Close (Esc)" aria-label="Close details" onClick={() => actions.deselect()}><Icon.close /></button></div>
     <div className="panel-body">{body}</div>
   </aside>
 }

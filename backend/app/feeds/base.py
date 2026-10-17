@@ -21,7 +21,17 @@ import httpx
 
 USER_AGENT = "TrossOps/1.0 (operational picture research demo)"
 TIMEOUT_S = 8.0
+CONNECT_RETRIES = 1
 ERROR_BACKOFF_MAX_S = 60.0
+
+# Shared edge cache (Vercel CDN) in front of the feed endpoints. Serverless instances do not share memory, so without it
+# every instance (and every cold start) re-fetches upstream and shared-IP rate limits (adsb.lol 420/429) bite. The edge
+# keeps one copy per URL fresh for half the feed TTL (5 s .. 5 min) and may serve it stale for one more TTL while it
+# revalidates in the background. Payloads carry `fetchedAt` (upstream time) and `generatedAt` (function time), so a
+# client can always tell how old an edge copy is. Responses without data are cached only briefly.
+EDGE_FRESH_MIN_S, EDGE_FRESH_MAX_S = 5, 300
+EDGE_SWR_MIN_S, EDGE_SWR_MAX_S = 10, 3600
+EDGE_NO_DATA_S = 5
 
 KT_TO_MPS = 0.514444
 FT_TO_M = 0.3048
@@ -73,6 +83,16 @@ def parallel(fn: Callable[[Any], Any], args: Iterable[Any], max_workers: int = 6
         return list(pool.map(wrap, args))
 
 
+def edge_cache_header(ttl_s: float, status: str) -> str:
+    """`Vercel-CDN-Cache-Control` value for a feed payload with this TTL and status (consumed by Vercel's CDN only;
+    browsers get `Cache-Control: max-age=0, must-revalidate` so polling clients never read their own stale copy)."""
+    if status not in ("working", "partial"):
+        return f"max-age={EDGE_NO_DATA_S}"
+    fresh = int(min(max(ttl_s / 2, EDGE_FRESH_MIN_S), EDGE_FRESH_MAX_S))
+    swr = int(min(max(ttl_s, EDGE_SWR_MIN_S), EDGE_SWR_MAX_S))
+    return f"max-age={fresh}, stale-while-revalidate={swr}"
+
+
 class FeedError(Exception):
     """Upstream or parse failure with a short human-readable reason."""
 
@@ -81,7 +101,15 @@ def describe(exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         return f"HTTP {exc.response.status_code} from {exc.request.url.host}"
     if isinstance(exc, httpx.TimeoutException):
-        return f"timeout after {TIMEOUT_S:.0f} s"
+        phase = {httpx.ConnectTimeout: "connect", httpx.ReadTimeout: "read", httpx.WriteTimeout: "write",
+                 httpx.PoolTimeout: "pool"}.get(type(exc), "read")
+        limit, host = TIMEOUT_S, None
+        try:
+            limit = float((exc.request.extensions.get("timeout") or {}).get(phase) or TIMEOUT_S)
+            host = exc.request.url.host
+        except RuntimeError:  # exception raised without an attached request
+            pass
+        return f"{phase} timeout after {limit:g} s" + (f" from {host}" if host else "")
     if isinstance(exc, httpx.HTTPError):
         return f"{type(exc).__name__}: {exc}"[:200]
     return f"{type(exc).__name__}: {exc}"[:200]
@@ -135,8 +163,11 @@ class Feed:
     # ---- plumbing ----------------------------------------------------------------------------------------------------
     def client(self) -> httpx.Client:
         if self._http is None or self._http_transport is not self.transport:
+            # Real network: retry a failed connection once (DNS hiccup, reset during a cold start's TLS handshake).
+            # httpx retries only connection errors, never a request the upstream has already seen.
+            transport = self.transport or httpx.HTTPTransport(retries=CONNECT_RETRIES)
             self._http = httpx.Client(timeout=TIMEOUT_S, headers={"User-Agent": USER_AGENT}, follow_redirects=True,
-                                      transport=self.transport)
+                                      transport=transport)
             self._http_transport = self.transport
         return self._http
 
@@ -225,5 +256,6 @@ class Feed:
         body = dict(self._data) if self._data is not None else self.empty()
         body.update({"id": self.id, "status": st["status"], "source": self.label, "licence": self.licence,
                      "attribution": self.attribution, "url": self.url, "fetchedAt": iso(self._fetched_at),
-                     "stale": st["stale"], "note": st["note"], "lastError": st["lastError"], "count": st["count"]})
+                     "stale": st["stale"], "note": st["note"], "lastError": st["lastError"], "count": st["count"],
+                     "generatedAt": iso(time.time()), "ttlS": self.ttl_s})
         return body

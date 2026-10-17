@@ -28,7 +28,7 @@ from . import geo, sitegen
 from .motion import MotionSpec, Path, densify, racetrack
 
 ROUTE_CACHE = FsPath(__file__).resolve().parents[1] / "data" / "world_routes.json.gz"
-ROUTE_CACHE_VERSION = 9  # 7: sites on dry road-free ground (berths in the sea); columns and loops on the network
+ROUTE_CACHE_VERSION = 10  # 7: sites on dry road-free ground (berths in the sea); columns and loops on the network
 
 # Public reference points (city centres, coastal and sea waypoints), [lng, lat].
 P: dict[str, tuple[float, float]] = {
@@ -553,16 +553,17 @@ class Orbat:
                 return [c0, (s.axis, 0.0)]
             roads = road_cells_near(c0)
             turns = (0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180) if s.kind == "navbase" else (0, 45, -45, 90)
-            for blocked in (roads, None):  # prefer road-free ground; accept roads only if nothing else fits
+            # prefer ground free of every road (incl. minor roads), then free of graph roads, then just dry
+            for blocked, minor in ((roads, True), (roads, False), (None, False)):
                 for turn in turns:
                     axis = (s.axis + turn) % 360
-                    dry, wet, sea = sitegen.placement_samples(self._layout(s, c0, axis))
-                    for tried, (de, dn) in enumerate(mask.candidates(c0, dry, max_m=25_000.0, wet=wet or None, blocked=blocked, sea=sea or None)):
+                    dry, wet, sea, core = sitegen.placement_samples(self._layout(s, c0, axis))
+                    for tried, (de, dn) in enumerate(mask.candidates(c0, dry, max_m=60_000.0 if s.kind == "navbase" else 25_000.0, wet=wet or None, blocked=blocked, sea=sea or None, minor=minor, core=core)):
                         c = mask.shift(c0, de, dn)
                         c = (round(c[0], 6), round(c[1], 6))
                         # the layout rebuilt at c (local metric frame) must pass exactly, not just the shifted samples
-                        dry2, wet2, sea2 = sitegen.placement_samples(self._layout(s, c, axis))
-                        if mask.dry_ok(dry2, blocked) and all(mask.is_water(q) for q in wet2) and all(mask.wet_ok(q, True) for q in sea2):
+                        dry2, wet2, sea2, core2 = sitegen.placement_samples(self._layout(s, c, axis))
+                        if mask.dry_ok(dry2, blocked, minor, core2) and all(mask.is_water(q) for q in wet2) and all(mask.wet_ok(q, True) for q in sea2):
                             return [c, (axis, 0.0)]
                         if tried > 200:  # near a coastline the shifted samples and the rebuilt layout can disagree
                             break
