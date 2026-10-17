@@ -4,6 +4,7 @@
   "outputDirectory": "frontend/dist",
   "framework": null,
   "functions": { "api/index.py": { "maxDuration": 60 } },
+  "regions": ["arn1"],
   "rewrites": [{ "source": "/api/(.*)", "destination": "/api/index" }],
   "headers": [{ "source": "/api/stream", "headers": [{ "key": "Cache-Control", "value": "no-cache, no-transform" }] }],
   "env": { "TROSSOPS_EPOCH": "hourly", "TROSSOPS_START_S": "600" }
