@@ -271,6 +271,14 @@ export class SceneController {
         this.analysisKey = ''
       }),
       job('night', 60_000, on.has('env.daylight'), async () => { setData(m, 'night', nightPolygon(new Date())) }),
+      job('traffic', 300_000, on.has('civil.traffic'), async () => {
+        const r = await api.traffic()
+        setData(m, 'traffic', { type: 'FeatureCollection', features: (r.items ?? []).filter(t => t.lng != null).map(t => ({ type: 'Feature', properties: { id: String(t.id), type: t.type, name: `${t.type}: ${t.roadNumber ?? ''} ${t.location ?? ''}`.trim(), message: t.message }, geometry: { type: 'Point', coordinates: [t.lng as number, t.lat as number] } })) })
+      }),
+      job('fires', 900_000, on.has('env.fires'), async () => {
+        const r = await api.fires()
+        setData(m, 'fires', { type: 'FeatureCollection', features: (r.items ?? []).map(f => ({ type: 'Feature', properties: { id: f.id, frp: f.frpMw, daynight: f.daynight, confidence: f.confidence, acquired: f.acquired }, geometry: { type: 'Point', coordinates: [f.lng as number, f.lat as number] } })) })
+      }),
       job('crisis', 300_000, on.has('civil.crisis'), async () => {
         // Active VMA (public warnings) are issued for named counties: draw those counties from the bundled SCB borders.
         const [r, counties] = await Promise.all([api.crisis(), this.counties ??= fetch('/data/sweden_counties.geojson').then(x => x.json() as Promise<GeoJSON.FeatureCollection>)])
@@ -623,11 +631,12 @@ export class SceneController {
       actions.select(hit.kind, hit.id, data)
       return
     }
-    const layers = ['police', 'reports', 'warnings-fill', 'analysis-fill', 'analysis-3d', 'cables-line', 'areas-fill', 'site-buildings-flat', 'site-buildings', 'site-logistics-flat', 'site-logistics', 'site-footprint'].filter(id => this.map.getLayer(id) && this.map.getLayoutProperty(id, 'visibility') !== 'none')
+    const layers = ['police', 'traffic', 'fires', 'reports', 'warnings-fill', 'analysis-fill', 'analysis-3d', 'cables-line', 'areas-fill', 'site-buildings-flat', 'site-buildings', 'site-logistics-flat', 'site-logistics', 'site-footprint'].filter(id => this.map.getLayer(id) && this.map.getLayoutProperty(id, 'visibility') !== 'none')
     const f = this.map.queryRenderedFeatures([[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]], { layers })[0]
     if (!f) { if (!s.route) actions.deselect(); return }
     const lid = f.layer.id, p = f.properties as Record<string, unknown>
     if (lid === 'police') actions.select('police', String(p.id), { lng: e.lngLat.lng, lat: e.lngLat.lat })
+    else if (lid === 'traffic' || lid === 'fires') actions.select('warning', String(p.id), { ...p, event: lid === 'fires' ? `Thermal anomaly (FRP ${p.frp ?? '?'} MW)` : p.name, level: lid === 'fires' ? 'NASA FIRMS' : 'Trafikverket' })
     else if (lid === 'reports') actions.select('input', String(p.id))
     else if (lid === 'warnings-fill') actions.select('warning', String(p.id), p)
     else if (lid.startsWith('analysis')) { const cell = this.lastSurface?.cells.find(c => c.h === p.h); actions.select('cell', String(p.h), { cell, surface: this.lastSurface?.surface, unit: this.lastSurface?.unit, note: this.lastSurface?.note }) }

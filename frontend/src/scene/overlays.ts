@@ -7,7 +7,7 @@ import { eventMarker, palette } from './symbols'
 export const empty = (): GeoJSON.FeatureCollection => ({ type: 'FeatureCollection', features: [] })
 
 const SOURCES = ['areas', 'cables', 'predictions', 'prediction-rings', 'plans', 'route-preview', 'trails', 'interventions', 'reports', 'police', 'warnings',
-  'stations', 'wind', 'analysis', 'site-detail', 'site-points', 'labels', 'night', 'ranges', 'leaders', 'crisis']
+  'stations', 'wind', 'analysis', 'site-detail', 'site-points', 'labels', 'night', 'ranges', 'leaders', 'crisis', 'fires', 'traffic']
 
 export const OVERLAY_LAYERS: Record<string, string[]> = {
   'picture.areas': ['areas-fill', 'areas-line'],
@@ -20,6 +20,8 @@ export const OVERLAY_LAYERS: Record<string, string[]> = {
   'civil.police_events': ['police'],
   'env.warnings': ['warnings-fill', 'warnings-line'],
   'civil.crisis': ['crisis-fill', 'crisis-line'],
+  'env.fires': ['fires-glow', 'fires'],
+  'civil.traffic': ['traffic'],
   'env.obs': ['stations-dot', 'stations-label'],
   'env.wind': ['wind'],
   'env.radar': ['radar'],
@@ -106,6 +108,9 @@ export function addOverlays(m: MlMap) {
     paint: { 'text-color': '#9fd3ff', 'text-halo-color': '#0a0e12', 'text-halo-width': 1.4 } })
   add({ id: 'wind', type: 'symbol', source: 'wind', layout: { 'icon-image': 'wind-arrow', 'icon-rotate': ['+', ['get', 'dir'], 180], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': true,
     'icon-size': ['interpolate', ['linear'], ['get', 'speed'], 0, 0.35, 10, 0.6, 25, 1.0] }, paint: { 'icon-opacity': ['interpolate', ['linear'], ['get', 'speed'], 0, 0.35, 15, 0.9] } })
+  add({ id: 'fires-glow', type: 'circle', source: 'fires', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 6, 10, 18], 'circle-color': '#ff5a1f', 'circle-opacity': 0.18, 'circle-blur': 0.8 } })
+  add({ id: 'fires', type: 'circle', source: 'fires', paint: { 'circle-radius': ['interpolate', ['linear'], ['coalesce', ['get', 'frp'], 1], 0, 2.5, 50, 6], 'circle-color': ['case', ['==', ['get', 'daynight'], 'D'], '#ffb020', '#ff5a1f'], 'circle-stroke-color': '#2a0a00', 'circle-stroke-width': 1 } })
+  add({ id: 'traffic', type: 'circle', source: 'traffic', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 3.5, 12, 7], 'circle-color': ['match', ['get', 'type'], 'Olycka', '#f0545a', 'Hinder', '#f2b43a', 'Restriktion', '#c58bff', '#7aa6d8'], 'circle-stroke-color': '#0a0e12', 'circle-stroke-width': 1.5 } })
   add({ id: 'reports', type: 'symbol', source: 'reports', layout: { 'icon-image': ['concat', 'rep:', ['get', 'severity']], 'icon-size': ['interpolate', ['linear'], ['zoom'], 4, 0.55, 10, 0.85], 'icon-allow-overlap': true, 'symbol-sort-key': ['get', 'rank'] } })
   add({ id: 'police', type: 'symbol', source: 'police', layout: { 'icon-image': ['case', ['get', 'alert'], 'pol:alert', 'pol'], 'icon-size': ['interpolate', ['linear'], ['zoom'], 4, 0.45, 10, 0.8], 'icon-allow-overlap': true } })
   add({ id: 'leaders', type: 'line', source: 'leaders', paint: { 'line-color': 'rgba(200,225,240,0.45)', 'line-width': 1 } })
