@@ -12,6 +12,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from . import envfile  # noqa: F401  (loads backend/.env before any feed reads its key)
 from . import planner, rules, views
 from .engine import Engine
 from .inputs import CHANNEL_META
@@ -212,7 +213,12 @@ def plan_route(body: PlanIn) -> dict:
     warnings = [{"title": i.title, "center": (i.position.longitudeDeg, i.position.latitudeDeg), "radiusM": i.radiusM or 50_000}
                 for i in ev.inputs if i.channel == "weather_advisory" and i.position]
     try:
-        result = planner.plan(e, (body.to[0], body.to[1]), ev.fx.predictions, restricted, warnings)
+        try:
+            from .feeds import TRAFIKVERKET
+            incidents = (getattr(TRAFIKVERKET, '_data', None) or {}).get('items', [])
+        except ImportError:
+            incidents = []
+        result = planner.plan(e, (body.to[0], body.to[1]), ev.fx.predictions, restricted, warnings, incidents)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     return {**result, "worldRevision": engine.revision, "atS": round(ev.t, 1)}
