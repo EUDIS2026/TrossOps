@@ -484,7 +484,7 @@ button.kpi:hover { border-color: var(--accent); }
   .search > svg { pointer-events: none; }
   .search input { position: absolute; inset: 0; width: 100%; padding: 0 10px 0 34px; opacity: 0; cursor: pointer; }
   .search kbd { display: none; }
-  .search.open { position: absolute; left: 8px; right: 8px; top: 8px; width: auto; z-index: 5; justify-content: flex-start; padding: 0 10px; }
+  .search.open { position: absolute; left: 8px; right: 8px; top: 8px; width: auto; z-index: 5; justify-content: flex-start; padding: 0 10px; background: var(--panel-solid); }
   .search.open input { opacity: 1; cursor: text; }
   .search-results { left: 0; right: 0; width: auto; }
   .kpi { min-width: 0; padding: 4px 9px; }
