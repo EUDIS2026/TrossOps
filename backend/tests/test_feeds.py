@@ -537,9 +537,18 @@ def test_router_sources_with_kill_switch(api, monkeypatch):
     assert api.get("/api/live/vessels/123/history").status_code == 404
 
 
+def fresh_locations(request):
+    """Digitraffic fixture shifted so its newest position is 'now' (history forgets positions older than 3 h)."""
+    body = fixture("digitraffic_locations.json")
+    shift = time.time() * 1000 - max(f["properties"]["timestampExternal"] for f in body["features"])
+    for f in body["features"]:
+        f["properties"]["timestampExternal"] += shift
+    return httpx.Response(200, json=body)
+
+
 def test_router_live_payloads(api):
     feeds.ADSB.transport = mock([("api.adsb.lol", "adsb_lol.json")])
-    feeds.AIS.transport = mock([("/api/ais/v1/locations", "digitraffic_locations.json"),
+    feeds.AIS.transport = mock([("/api/ais/v1/locations", fresh_locations),
                                 ("/api/ais/v1/vessels", "digitraffic_vessels.json")])
     feeds.POLISEN.transport = mock([("polisen.se/api/events", "polisen.json")])
     aircraft = api.get("/api/live/aircraft").json()

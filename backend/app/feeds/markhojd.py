@@ -172,8 +172,13 @@ class MarkhojdFeed(Feed):
         try:
             for i in range(0, len(points), MAX_VERTICES):
                 chunk = points[i:i + MAX_VERTICES]
-                if len(chunk) == 1:
-                    chunk = chunk + chunk
+                if len(chunk) == 1:  # a one-vertex LineString is rejected (HTTP 400): use the point query
+                    e, n = to_sweref99tm(*chunk[0])
+                    r = client.get(f"{API}/hojd", params={"srid": 3006, "e": round(e, 2), "n": round(n, 2)}, headers=self._headers(client))
+                    r.raise_for_status()
+                    z = r.json()["geometry"]["coordinates"][2]
+                    out.append(None if z is None or z <= NODATA + 1 else round(float(z), 1))
+                    continue
                 geom = {"type": "LineString", "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:EPSG::3006"}},
                         "coordinates": [[round(c, 2) for c in to_sweref99tm(*p)] for p in chunk]}
                 r = client.post(f"{API}/hojd", json=geom, headers={**self._headers(client), "Content-Type": "application/json"})
