@@ -216,10 +216,18 @@ class RouteCache:
     def save(self) -> None:
         if not self.dirty:
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        blob = json.dumps({"version": ROUTE_CACHE_VERSION, "routes": self.data}, separators=(",", ":")).encode()
-        self.path.write_bytes(gzip.compress(blob, 9))
+        blob = json.dumps({"version": ROUTE_CACHE_VERSION, "routes": dict(sorted(self.data.items()))}, separators=(",", ":")).encode()
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_bytes(gzip.compress(blob, 9, mtime=0))
+        except OSError:  # read-only deployment (serverless): keep the computed routes in memory only
+            return
         self.dirty = False
+
+
+def stable_seed(*parts) -> int:
+    """Process-independent seed (Python's hash() of a str is randomised per process)."""
+    return int(hashlib.md5(repr(parts).encode()).hexdigest()[:8], 16) & 0xFFFF
 
 
 def _geonet():
@@ -706,7 +714,7 @@ class Orbat:
 
     def _ad_unit(self, cid: str, label: str, parent: str, region: str | None, center: tuple[float, float], launchers: int, radars: int, plat: str, range_km: float) -> None:
         self.formation(cid, label, label.split(" ")[-1] if "Battery" not in label else label.replace("AD Battery ", "Bty "), "SFGPUCD----E", "company", parent, "land.ad", "land", region=region, caps=["air_defence"])
-        for i, (p, b) in enumerate(sitegen.ad_battery_positions(center, 0, launchers, 1800 if range_km > 50 else 900, hash(cid) & 0xFFFF)):
+        for i, (p, b) in enumerate(sitegen.ad_battery_positions(center, 0, launchers, 1800 if range_km > 50 else 900, stable_seed(cid))):
             n = self.vehicle(f"{cid[3:]}-l{i + 1}", f"{label} L{i + 1}", "ad_launcher", cid, region, MotionSpec("static", pos=(p[0], p[1], None), heading=b))
             n.platform = plat
             n.range_km = range_km
@@ -805,7 +813,7 @@ class Orbat:
                                   None, f"{ci + 1}{'AB'[t]}", "Home Guard platoon", "personnel", None, code, ["guard", "area_security"],
                                   MotionSpec("static", pos=(p[0], p[1], None), heading=t * 140), crew=30, range_km=20, tags=[task]))
                 if ci == 0:
-                    route = street_loop(self.cache, seat, hash(code) & 0xFFFF, P[seat], 9000) if seat in _known_cities() else None
+                    route = street_loop(self.cache, seat, stable_seed(code), P[seat], 9000) if seat in _known_cities() else None
                     if route:
                         path = self.shared_route(f"r-hg-{code}", route, 11.0)
                         self.add(Node(f"hg-{code}-v1", f"HG {county} patrol vehicle", "ground_vehicle", "land", "land.homeguard", "SFGPEVU-----", "own", cid, None,

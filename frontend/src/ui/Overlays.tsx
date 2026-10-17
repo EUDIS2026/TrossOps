@@ -40,7 +40,8 @@ export function Legend() {
   const info = useApp(s => s.analysisInfo)
   const on = useApp(s => analysisLayer(s))
   const label = useApp(s => s.views?.layers.find(l => l.id === on)?.label)
-  if (!on || !info) return null
+  const drawer = useApp(s => s.panels.layers)
+  if (!on || !info || drawer) return null
   return <div className="map-legend">
     <div className="legend-title"><span>{label}</span><button className="icon-button small" title="Hide surface" onClick={() => actions.setAnalysis(null)}><Icon.close width={13} height={13} /></button></div>
     <div className="legend-row">{info.legend.map(x => <span key={x.label} className="swatch"><i style={{ background: x.color }} />{x.label}</span>)}</div>

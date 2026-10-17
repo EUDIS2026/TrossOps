@@ -18,6 +18,8 @@ import { ModelLayer, modelZoomFor, type ModelInstance } from './models3d'
 import { addOverlays, circleRing, DETAIL_LAYERS, empty, nightPolygon, OVERLAY_LAYERS, setData } from './overlays'
 import { SpriteLayer } from './sprites'
 import { halo, headingArrow, natoSymbol, palette, trafficIcon, vesselColor } from './symbols'
+import { hasTopdown, topdownImage, TOPDOWN_FILL } from './topdown'
+import { MODEL_SPECS, type ModelKey } from './three/models'
 
 const ECHELON_PX: Record<string, number> = { service: 60, division: 58, brigade: 56, regiment: 54, battalion: 52, company: 48, platoon: 46 }
 const AFF_LABEL: Record<string, string> = { own: '#a6e6ff', allied: '#a6e6ff', civil: '#f2b8f2', unknown: '#ffff8c', hostile_suspected: '#ff9a9a' }
@@ -32,6 +34,7 @@ function spriteFactory(key: string): HTMLCanvasElement {
   if (kind === 'halo') return halo(a === '1')
   if (kind === 'ac') return trafficIcon(a === 'heli' ? 'heli' : 'air', a === 'mil' ? palette.liveMil : a === 'emg' ? palette.liveEmergency : palette.liveAir, a === 'heavy' ? 1.25 : 1)
   if (kind === 'vs') return trafficIcon('sea', a, 0.9)
+  if (kind === 'td') return topdownImage(a as ModelKey, b)
   return natoSymbol('SUGP--------')
 }
 
@@ -393,6 +396,13 @@ export class SceneController {
       if (selected || hovered === e.id) this.sprites.push(mx, my, alt, it.lat, `halo|${selected ? 1 : 0}`, size * 1.25, 0, 1)
       if (leafModel) {
         modelInstances.push({ id: e.id, lng: it.lng, lat: it.lat, alt: n.pose.alt, heading: n.pose.heading, pitch: n.pose.pitch, bank: n.pose.bank, model: e.model!, affiliation: e.affiliation, condition: cond, selected, speed: n.pose.speed })
+      } else if (!s.threeD && zoom >= 14.6 && !it.aggregate && !isSite && hasTopdown(e.model)) {
+        // street zoom in 2D: the platform itself, at true scale and heading, instead of its frame symbol
+        const spec = MODEL_SPECS[e.model]
+        const mpp = (156543.03392 * Math.cos((it.lat * Math.PI) / 180)) / 2 ** zoom
+        const px = Math.max(22, Math.max(spec.lengthM, spec.widthM) / TOPDOWN_FILL / mpp)
+        this.sprites.push(mx, my, null, it.lat, `td|${e.model}|${e.affiliation}`, px, n.pose.heading - bearing, n.status?.[5] ? 0.55 : 1)
+        if (cond !== 'normal') this.sprites.push(mx, my, null, it.lat, `halo|0`, px * 0.8, 0, 1)
       } else {
         this.sprites.push(mx, my, alt, it.lat, `ms|${e.sidc ?? 'SUGP--------'}|${cond}`, size, 0, n.status?.[5] ? 0.55 : 1)
         if (!it.aggregate && n.pose.speed > 0.5) this.sprites.push(mx, my, alt, it.lat, `arrow|${e.affiliation === 'unknown' ? '#ffff8c' : e.affiliation === 'civil' ? '#f2b8f2' : '#d8f4ff'}`, size, n.pose.heading - bearing, 0.95)

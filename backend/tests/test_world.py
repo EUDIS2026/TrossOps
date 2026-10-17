@@ -56,3 +56,18 @@ def test_altitude_datum_is_honest():
     assert cruising.position.altitudeDatum == "MSL"
     land = w.entity_at(w.entities["coy-n1a-01"], 0, "2026-01-01T00:00:00+00:00", 1)
     assert land.position.altitudeM is None and land.position.altitudeDatum == "UNKNOWN"
+
+
+def test_world_is_identical_across_processes():
+    """Serverless instances and replays rebuild the world in fresh processes: nothing may depend on hash randomisation."""
+    import os
+    import subprocess
+    import sys
+    code = ("import hashlib; from app.orbat import Orbat; o = Orbat(); "
+            "print(hashlib.md5(repr(sorted((k, v.motion.pos if v.motion and v.motion.kind == 'static' else (v.motion.path.length if v.motion and v.motion.path else None)) "
+            "for k, v in o.nodes.items())).encode()).hexdigest())")
+    outs = set()
+    for seed in ("1", "2"):
+        env = {**os.environ, "PYTHONHASHSEED": seed}
+        outs.add(subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=os.path.dirname(os.path.dirname(__file__)), check=True).stdout.strip())
+    assert len(outs) == 1
