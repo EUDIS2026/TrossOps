@@ -145,7 +145,8 @@ def assess(ctx, fx) -> dict[str, dict]:
     for i in ctx.inputs:
         if i.channel not in ("public_news", "field_report", "police_event") or not i.position:
             continue
-        if i.channel == "police_event" and "drone" not in i.tags:
+        heat_claim = bool(HEAT_CLAIM_TAGS & set(i.tags))
+        if i.channel == "police_event" and "drone" not in i.tags and not heat_claim:
             continue
         p = (i.position.longitudeDeg, i.position.latitudeDeg)
         radius = max(i.radiusM or 10_000, 10_000)
@@ -175,7 +176,57 @@ def assess(ctx, fx) -> dict[str, dict]:
             ind.append(_ind("N3", "Sensor corroboration", -1.5, ", ".join(s.id for s in corroborating[:3])))
         if official:
             ind.append(_ind("N4", "Official channel corroboration", -1.2, ", ".join(f"{s.channel.replace('_', ' ')} {s.id}" for s in official[:3])))
+        if heat_claim:
+            ind.extend(thermal_indicators(ctx, i, p))
         if not ind:
             continue
-        out[i.id] = _result(i.id, "report", "Disinformation or misidentification", PRIOR_REPORT, ind, ["task ISR to the reported location", "contact the original author", "cross-check own unit positions"])
+        collect = ["task ISR to the reported location", "contact the original author", "cross-check own unit positions"]
+        if heat_claim:
+            collect.append("check NASA FIRMS after the next VIIRS overpass")
+        out[i.id] = _result(i.id, "report", "Disinformation or misidentification", PRIOR_REPORT, ind, collect)
     return out
+
+
+HEAT_CLAIM_TAGS = {"explosion", "fire"}
+THERMAL_CLAIM_M = 5_000  # search radius around a precisely placed claim ...
+THERMAL_CLAIM_MAX_M = 25_000  # ... widened to the report's own uncertainty radius, at most this (police municipality positions)
+THERMAL_BEFORE = timedelta(hours=1)  # a detection from 1 h before the report (clock and reporting lag) ...
+THERMAL_AFTER = timedelta(hours=12)  # ... to 12 h after it (fires burn on; VIIRS passes every few hours) can corroborate
+THERMAL_PASS_LAG = timedelta(minutes=30)  # an overpass at least this long after the report is needed before absence means anything
+THERMAL_MAX_AGE = timedelta(hours=24)  # FIRMS is fetched for the last 24 h: older claims cannot be checked
+
+
+def thermal_indicators(ctx, i, p) -> list[dict]:
+    """A reported explosion or fire against NASA FIRMS. N6 (−1.0): a VIIRS heat source within the search radius that first
+    appeared between 1 h before and 12 h after the report (a source already burning earlier is pre-existing heat, e.g.
+    industry, and does not corroborate). D15 (+0.4): nothing there, although a VIIRS overpass after the report is evidenced
+    by the feed's latest acquisition. Absence is weak evidence: cloud, small or brief events and 375 m pixels hide many."""
+    t_claim = _parse(i.effectiveAt)
+    if t_claim is None:
+        return []
+    radius = min(max(THERMAL_CLAIM_M, i.radiusM or 0), THERMAL_CLAIM_MAX_M)
+    hits, earlier = [], []
+    for s in ctx.inputs:
+        if s.channel != "thermal_anomaly" or not s.position:
+            continue
+        d = geo.haversine_m(p, (s.position.longitudeDeg, s.position.latitudeDeg))
+        if d > radius + (s.radiusM or 0):
+            continue
+        last = _parse(s.effectiveAt)
+        first = next((_parse(t.split(":", 1)[1]) for t in s.tags if t.startswith("first:")), None) or last
+        if last is None or first is None or last < t_claim - THERMAL_BEFORE or first > t_claim + THERMAL_AFTER:
+            continue
+        (hits if first >= t_claim - THERMAL_BEFORE else earlier).append((s, d, first, last))
+    if hits:
+        s, d, first, last = min(hits, key=lambda h: h[1])
+        return [_ind("N6", "Thermal anomaly corroborates", -1.0,
+                     f"{s.id}: {s.title}, {d / 1000:.1f} km from the reported position (search {radius / 1000:.0f} km), detected "
+                     f"{first.strftime('%H:%M')}–{last.strftime('%H:%M')} UTC, within −1 h/+12 h of the report. VIIRS sees heat, not its cause.")]
+    now = _parse(ctx.now_iso)
+    latest = _parse((getattr(ctx, "feed_meta", None) or {}).get("thermalLatestAcquired"))
+    if now is None or latest is None or t_claim < now - THERMAL_MAX_AGE or latest < t_claim + THERMAL_PASS_LAG:
+        return []
+    pre = f"; {len(earlier)} pre-existing heat source(s) nearby (burning before the report) not counted" if earlier else ""
+    return [_ind("D15", "No thermal anomaly after a satellite pass", 0.4,
+                 f"no VIIRS heat source within {radius / 1000:.0f} km first seen after the report, although the feed holds detections acquired up to "
+                 f"{latest.strftime('%H:%M')} UTC{pre}. Weak evidence: cloud, small or brief events and 375 m pixels hide many real ones.")]
