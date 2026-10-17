@@ -181,18 +181,37 @@ TAG_WORDS: dict[str, str] = {
 }
 
 
+# Keywords match at the start of a word only ("ice" must not tag "police" as weather, "wind" not "window"); a few stems
+# carry explicit exclusions ("engine" is not "engineer", "wind" is not "window").
+TAG_EXCLUDE: dict[str, str] = {"engine": r"engine(?:er|ering)", "radio": r"radiolog", "wind": r"window", "ice": r"iceland"}
+NEGATION = re.compile(r"\b(?:no|not|without|nor|zero|inga|ingen|inte)\s+(?:\w+\s+){0,1}$")
+
+
+def _matches(word: str, low: str) -> bool:
+    for m in re.finditer(rf"\b{re.escape(word)}", low):
+        ex = TAG_EXCLUDE.get(word)
+        if ex and re.match(ex, low[m.start():]):
+            continue
+        return True
+    return False
+
+
+def _severity_from_text(low: str) -> Severity:
+    """Highest keyword severity whose match is not negated ("no casualties" is not critical)."""
+    for pattern, sev in SEVERITY_WORDS:
+        for m in re.finditer(pattern, low):
+            if not NEGATION.search(low[max(0, m.start() - 24):m.start()]):
+                return sev
+    return "info"
+
+
 def parse_input(body: InputIn, entity_ids: set[str], received_at: datetime) -> InputReport:
-    """Deterministic extraction: severity from keywords (unless given), entity ids and place names from the text."""
+    """Deterministic extraction: severity from keywords (unless given, negations skipped), entity ids and place names from the text."""
     text = f"{body.title} {body.text}"
     low = text.lower()
-    severity: Severity = body.severity or "info"
-    if body.severity is None:
-        for pattern, sev in SEVERITY_WORDS:
-            if re.search(pattern, low):
-                severity = sev
-                break
+    severity: Severity = body.severity or _severity_from_text(low)
     refs = list(dict.fromkeys(body.entityRefs + [eid for eid in entity_ids if re.search(rf"\b{re.escape(eid)}\b", low)]))
-    tags = list(dict.fromkeys(body.tags + [tag for word, tag in TAG_WORDS.items() if word in low]))
+    tags = list(dict.fromkeys(body.tags + [tag for word, tag in TAG_WORDS.items() if _matches(word, low)]))
     position = body.position
     if position is None:
         for name, (lng, lat) in P.items():
