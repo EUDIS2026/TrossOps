@@ -59,7 +59,7 @@ export function fusion(contribs: AttentionContribution[], res: number): SurfaceR
     const reasons = [...a.reasons.entries()].sort((x, y) => y[1] - x[1]).slice(0, 4).map(([r, w]) => `${r} (${w.toFixed(2)})`)
     cells.push({ h, value: a.v, label: `attention ${a.v.toFixed(2)}`, reasons, color: col(a.v / max), height: (a.v / max) * 40_000 })
   }
-  return { surface: 'fusion', res, unit: 'Σ rule weight × kernel', note: 'Where the rule engine says to look. Click a cell for the rules and inputs behind it.',
+  return { surface: 'fusion', res, unit: 'combined rule weight', note: 'Where the rule engine says to look. Click a cell for the rules and reports behind it.',
     legend: [{ color: 'rgba(255,196,92,0.5)', label: 'low' }, { color: 'rgba(255,110,48,0.8)', label: 'elevated' }, { color: 'rgba(255,40,70,0.95)', label: `high (${max.toFixed(1)})` }], cells }
 }
 
@@ -104,7 +104,7 @@ export function coverage(world: WorldModel, res: number): SurfaceResult {
     const label = !by.length ? 'gap' : ad ? `defended (${ad} AD)` : `${radar} sensor${radar > 1 ? 's' : ''}`
     cells.push({ h, value: by.length, label, reasons: by.length ? by.slice(0, 6) : ['no modelled radar, AEW or AD coverage at 1,000 m'], color, height: by.length ? 0 : 6000 })
   }
-  return { surface: 'coverage', res, unit: 'sensors covering at 1,000 m', note: 'Radar horizon + AD envelopes + airborne AEW. Red cells are gaps.',
+  return { surface: 'coverage', res, unit: 'sensors covering at 1,000 m', note: 'Radar horizon, air-defence envelopes and airborne early warning. Red cells are gaps.',
     legend: [{ color: 'rgba(240,84,90,0.7)', label: 'gap' }, { color: 'rgba(80,170,255,0.4)', label: 'radar' }, { color: 'rgba(80,170,255,0.6)', label: '2+ radars' }, { color: 'rgba(72,200,160,0.7)', label: 'AD envelope' }], cells }
 }
 
@@ -130,7 +130,7 @@ export function response(world: WorldModel, res: number): SurfaceResult {
     }
     cells.push({ h, value: best, label: `${best.toFixed(0)} min`, reasons: [`fastest: ${who}`, 'prep + distance ÷ speed; ground distance × 1.35 for roads'], color: col(best), height: Math.min(best, 90) * 300 })
   }
-  return { surface: 'response', res, unit: 'minutes', note: 'Fastest ready responder to each cell (QRA, helicopters, mechanised units).',
+  return { surface: 'response', res, unit: 'minutes', note: 'Fastest ready responder to each cell (quick-reaction fighters, helicopters, mechanised units).',
     legend: [{ color: 'rgba(72,200,140,0.7)', label: '< 15 min' }, { color: 'rgba(240,190,70,0.7)', label: '45 min' }, { color: 'rgba(240,70,80,0.8)', label: '> 60 min' }], cells }
 }
 
