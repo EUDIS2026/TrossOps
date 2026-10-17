@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import type { Alert, InputReport, LayerDef } from '../contracts/types'
 import { actions, currentMode, EMPTY, EMPTY_OBJ, layerOn, store, useApp, type Basemap, type Panel } from '../core/store'
-import { ago, channelLabel, Fact, fmtTime, useRuntime } from './context'
+import { ago, channelLabel, Fact, fmtTime, onTabKeys, useRuntime } from './context'
 import { Icon } from './icons'
 import { ToolsDockButton } from './tools/ToolsControl'
 
@@ -150,10 +150,10 @@ function FeedPanel() {
   const [tab, setTab] = useState<'alerts' | 'feed' | 'public'>('alerts')
   const open = alerts.filter(a => !a.acknowledged)
   return <>
-    <div className="seg full" role="tablist" aria-label="Alerts and reports">
-      <button role="tab" aria-selected={tab === 'alerts'} aria-pressed={tab === 'alerts'} title="Raised by the rule engine; the number counts those not yet acknowledged" onClick={() => setTab('alerts')}>Alerts · {open.length}</button>
-      <button role="tab" aria-selected={tab === 'feed'} aria-pressed={tab === 'feed'} title="Every incoming report from every channel, newest first" onClick={() => setTab('feed')}>Reports · {inputs.length}</button>
-      <button role="tab" aria-selected={tab === 'public'} aria-pressed={tab === 'public'} title="Real public information: crisis news, police events, space weather" onClick={() => setTab('public')}>Public info</button></div>
+    <div className="seg full" role="tablist" aria-label="Alerts and reports" onKeyDown={onTabKeys}>
+      <button role="tab" aria-selected={tab === 'alerts'} tabIndex={tab === 'alerts' ? 0 : -1} title="Raised by the rule engine; the number counts those not yet acknowledged" onClick={() => setTab('alerts')}>Alerts · {open.length}</button>
+      <button role="tab" aria-selected={tab === 'feed'} tabIndex={tab === 'feed' ? 0 : -1} title="Every incoming report from every channel, newest first" onClick={() => setTab('feed')}>Reports · {inputs.length}</button>
+      <button role="tab" aria-selected={tab === 'public'} tabIndex={tab === 'public' ? 0 : -1} title="Real public information: crisis news, police events, space weather" onClick={() => setTab('public')}>Public info</button></div>
     {tab === 'public' ? <PublicInfo /> : <div className="list">
       {tab === 'alerts' ? (alerts.length ? alerts.map(a => <AlertRow key={a.id} a={a} />) : <div className="quiet empty">No alerts. The rules raise one when a report, track or unit needs attention.</div>)
         : inputs.length ? [...inputs].reverse().map(i => <InputRow key={i.id} i={i} />) : <div className="quiet empty">No reports yet. Use New report (R) or run a scenario (S) to add one.</div>}
