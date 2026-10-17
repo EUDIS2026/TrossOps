@@ -40,6 +40,7 @@ export interface WorldCatalog {
 
 export type Channel = 'field_report' | 'unit_sitrep' | 'logistics_report' | 'maintenance_log' | 'sensor_detection' | 'intel_report' | 'civil_emergency' | 'weather_advisory'
   | 'infrastructure_status' | 'public_news' | 'cyber_alert' | 'command_directive' | 'allied_liaison' | 'head_of_state_directive' | 'police_event' | 'crisis_info'
+  | 'road_situation' | 'thermal_anomaly'
 export interface InputReport {
   id: string; channel: Channel; authorLevel: string; author: string; receivedAt: string; effectiveAt: string; severity: Severity; title: string; text: string
   position: GeoPosition | null; radiusM: number | null; entityRefs: string[]; region: string | null; tags: string[]; sourceKind: SourceKind; acknowledged: boolean

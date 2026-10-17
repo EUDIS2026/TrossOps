@@ -8,6 +8,12 @@ the caches warm; on a cold instance the engine simply sees no real inputs yet. T
 - Pattern indicators on real traffic (rule R19): AIS vessels slow over an undersea cable corridor for >= 20 min, and
   ADS-B aircraft flying orbit/racetrack patterns (the signature of ISR flights). These are neutral indicators derived
   from public broadcasts, never assessments of the named vessel or aircraft.
+- Trafikverket road situations (accidents, obstructions, restrictions) in force now or within 6 h → `road_situation`
+  (rule R21: obstructions on a moving column's route, accidents near own sites).
+- NASA FIRMS VIIRS thermal anomalies from the last 24 h, clustered per heat source → `thermal_anomaly` (rule R22 and
+  the deception layer's corroboration of explosion and fire claims).
+The engine keeps a road situation or thermal anomaly only when it concerns the picture (`relevance.relevant`): near an own site,
+an own road march, or (thermal) a reported explosion or fire.
 """
 from __future__ import annotations
 
@@ -117,7 +123,137 @@ def inputs_for_engine(t: float) -> list[InputReport]:
                                position=GeoPosition(longitudeDeg=lng, latitudeDeg=lat), radiusM=150_000, tags=["gnss", "ew", "real"], sourceKind="observed"))
     out.extend(_ais_cable_loiter(iso))
     out.extend(_adsb_orbits(iso))
+    out.extend(_memo("tv", feeds.TRAFIKVERKET, now, road_situations))
+    out.extend(_memo("firms", feeds.FIRMS, now, thermal_anomalies))
     _ = t
+    return out
+
+
+_MEMO: dict[str, tuple[tuple, list[InputReport]]] = {}
+
+
+def _memo(key: str, feed, now: datetime, fn) -> list[InputReport]:
+    """Large feeds (hundreds of road situations or fire pixels) are translated once per feed payload and minute, not
+    on every 2 s evaluation. The reports are shared between evaluations; the engine only (re)sets `acknowledged` on them."""
+    data = _cached(feed)
+    items = data.get("items") or []
+    sig = (hash(tuple((it.get("id"), it.get("lng"), it.get("lat"), it.get("start"), it.get("end"), it.get("acquired")) for it in items if isinstance(it, dict))),
+           len(items), int(now.timestamp() // 60))
+    hit = _MEMO.get(key)
+    if hit is None or hit[0] != sig:
+        hit = (sig, fn(now))
+        _MEMO[key] = hit
+    return list(hit[1])
+
+
+# ---- Trafikverket road situations -> `road_situation` -----------------------------------------------------------------
+ROAD_KIND = {"Olycka": "accident", "Hinder": "obstruction", "Restriktion": "restriction", "Viktig trafikinformation": "traffic_info"}
+ROAD_KIND_EN = {"accident": "Accident", "obstruction": "Obstruction", "restriction": "Restriction", "traffic_info": "Traffic information"}
+ROAD_BASE_SEVERITY = {"accident": "advisory", "obstruction": "advisory", "restriction": "info", "traffic_info": "info"}
+ROAD_LOOKAHEAD = timedelta(hours=6)  # a situation starting later than this is not yet relevant to a march
+ACCIDENT_STALE = timedelta(hours=12)  # an accident with no end time older than this is a stale record, not a live blockage
+
+
+def road_situations(now: datetime) -> list[InputReport]:
+    """Trafikverket deviations with a position, in force now or within ROAD_LOOKAHEAD, not ended. Severity: accidents and
+    obstructions advisory, restrictions and traffic information info; Trafikverket's own impact grade 4-5 ('stor' /
+    'mycket stor påverkan') raises one step. The end time travels as a `valid_to:` tag so rules can tell whether the
+    situation will still be there when a column arrives."""
+    out = []
+    for it in _cached(feeds.TRAFIKVERKET).get("items", []) or []:
+        try:
+            r = _road_item(it, now)
+        except Exception:  # noqa: BLE001  one malformed deviation must not drop the rest (or the other feeds' inputs)
+            r = None
+        if r is not None:
+            out.append(r)
+    return out
+
+
+def _road_item(it: dict, now: datetime) -> InputReport | None:
+    iso = now.isoformat()
+    kind = ROAD_KIND.get(it.get("type") or "")
+    if not kind or it.get("lng") is None or it.get("lat") is None or not it.get("id"):
+        return None
+    start, end = _when(it.get("start")), _when(it.get("end"))
+    start, end = (start.astimezone(timezone.utc) if start else None), (end.astimezone(timezone.utc) if end else None)
+    if end is not None and end < now:
+        return None
+    if start is not None and start > now + ROAD_LOOKAHEAD:
+        return None
+    if kind == "accident" and end is None and start is not None and start < now - ACCIDENT_STALE:
+        return None
+    sev = ROAD_BASE_SEVERITY[kind]
+    code = it.get("severityCode")
+    if isinstance(code, (int, float)) and code >= 4:
+        sev = {"info": "advisory", "advisory": "warning"}.get(sev, sev)
+    road = it.get("roadNumber")
+    road_s = f"road {road}" if road and not str(road).lower().startswith(("väg", "road", "e")) else (str(road) if road else "")
+    where = ", ".join(x for x in (road_s, it.get("location") or "") if x) or "unnamed road"
+    valid = f"In force from {(start or now).strftime('%Y-%m-%d %H:%M')} UTC" + (f" until {end.strftime('%Y-%m-%d %H:%M')} UTC" if end else " until further notice")
+    impact = f" Trafikverket impact: {it.get('severity')}." if it.get("severity") else ""
+    tags = ["road", "trafikverket", "real", kind] + ([f"valid_to:{end.isoformat()}"] if end else []) + ([f"road:{road}"] if road else [])
+    return InputReport(id=f"in-x-tv-{it['id']}", channel="road_situation", authorLevel="civil_authority", author="Trafikverket (real road situation)",
+                       receivedAt=iso, effectiveAt=(start or now).isoformat(), severity=sev, title=f"{ROAD_KIND_EN[kind]}: {where}"[:160],  # type: ignore[arg-type]
+                       text=f"{(it.get('message') or '').strip()[:400]} {valid}.{impact}".strip(), position=GeoPosition(longitudeDeg=it["lng"], latitudeDeg=it["lat"]),
+                       radiusM=500, tags=tags, sourceKind="public")
+
+
+# ---- NASA FIRMS -> `thermal_anomaly` -----------------------------------------------------------------------------------
+FIRMS_MAX_AGE = timedelta(hours=24)
+FIRMS_CLUSTER_M = 1_500  # VIIRS 375 m pixels: one heat source shows as several pixels and on several satellites' passes
+FIRMS_CONFIDENCE = {"h": "high", "n": "nominal", "l": "low"}
+FIRMS_CAVEAT = ("VIIRS detects heat, not fire: gas flares, steelworks, power plants, controlled burns and sun glint also "
+                "register. Verify before acting.")
+
+
+def thermal_anomalies(now: datetime) -> list[InputReport]:
+    """VIIRS detections from the last 24 h, nominal or high confidence (low-confidence pixels are mostly glint and edge
+    noise), clustered within 1.5 km into one input per heat source. The input id is the earliest detection in the
+    cluster, so it stays stable as later passes add detections. A source seen on both day and night passes is
+    persistent heat - as consistent with industry or a flare as with a fire - and the text says so."""
+    dets = []
+    for d in _cached(feeds.FIRMS).get("items", []) or []:
+        if not isinstance(d, dict) or not isinstance(d.get("lng"), (int, float)) or not isinstance(d.get("lat"), (int, float)):
+            continue
+        when = _when(d.get("acquired"))
+        conf = str(d.get("confidence") or "").lower()[:1]
+        if d.get("lng") is None or d.get("lat") is None or when is None or when < now - FIRMS_MAX_AGE or conf == "l":
+            continue
+        dets.append((when, str(d.get("id")), d))
+    dets.sort(key=lambda x: (x[0], x[1]))
+    clusters: list[list[tuple[datetime, str, dict]]] = []
+    cells: dict[tuple[int, int], list[int]] = {}  # 0.05° x 0.02° cells (>= 2 km at Swedish latitudes): only neighbours are compared
+    for det in dets:
+        p = (det[2]["lng"], det[2]["lat"])
+        cx, cy = math.floor(p[0] / 0.05), math.floor(p[1] / 0.02)
+        near = [k for dx in (-1, 0, 1) for dy in (-1, 0, 1) for k in cells.get((cx + dx, cy + dy), ())]
+        home = next((k for k in sorted(near) if geo.haversine_m(p, (clusters[k][0][2]["lng"], clusters[k][0][2]["lat"])) <= FIRMS_CLUSTER_M), None)
+        if home is None:
+            cells.setdefault((cx, cy), []).append(len(clusters))
+            clusters.append([det])
+        else:
+            clusters[home].append(det)
+    out = []
+    for c in clusters:
+        first, last = c[0], c[-1]
+        frp = max((x[2].get("frpMw") or 0.0) for x in c)
+        lng = sum(x[2]["lng"] for x in c) / len(c)
+        lat = sum(x[2]["lat"] for x in c) / len(c)
+        dn = {str(x[2].get("daynight") or "").upper() for x in c}
+        sats = sorted({str(x[2].get("satellite") or x[2].get("source") or "VIIRS") for x in c})
+        conf = "high" if any(str(x[2].get("confidence") or "").lower().startswith("h") for x in c) else "nominal"
+        persistent = {"D", "N"} <= dn
+        text = (f"{len(c)} VIIRS detection(s) ({', '.join(sats)}) within {FIRMS_CLUSTER_M / 1000:.1f} km, first {first[0].strftime('%H:%M')} UTC, "
+                f"latest {last[0].strftime('%H:%M')} UTC; peak fire radiative power {frp:.1f} MW, {conf} confidence. "
+                + ("Seen on both day and night passes: persistent heat, consistent with industry or a gas flare as much as a fire. " if persistent else "")
+                + FIRMS_CAVEAT)
+        out.append(InputReport(id=f"in-x-firms-{first[1]}", channel="thermal_anomaly", authorLevel="sensor", author="NASA FIRMS VIIRS (real)",
+                               receivedAt=now.isoformat(), effectiveAt=last[0].isoformat(), severity="advisory" if frp >= 10 else "info",
+                               title=f"Thermal anomaly, {frp:.0f} MW FRP ({len(c)} detection{'s' if len(c) > 1 else ''})",
+                               text=text, position=GeoPosition(longitudeDeg=lng, latitudeDeg=lat), radiusM=FIRMS_CLUSTER_M,
+                               tags=["thermal", "firms", "real", f"frp:{frp:.1f}", f"first:{first[0].isoformat()}"] + (["persistent"] if persistent else []),
+                               sourceKind="observed"))
     return out
 
 

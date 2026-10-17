@@ -21,6 +21,8 @@ GRADING: dict[str, tuple[str, int]] = {
     "maintenance_log": ("A", 2), "civil_emergency": ("A", 2), "weather_advisory": ("A", 1), "infrastructure_status": ("B", 2), "public_news": ("E", 4),
     "cyber_alert": ("B", 2), "command_directive": ("A", 1), "allied_liaison": ("B", 2), "head_of_state_directive": ("A", 1),
     "police_event": ("B", 3), "crisis_info": ("A", 2), "adsb": ("A", 2), "ais": ("C", 3),
+    "road_situation": ("A", 2),  # the road authority's own operational record
+    "thermal_anomaly": ("B", 3),  # a reliable satellite detection of heat; *what* burns (fire, flare, industry) is only possibly true
 }
 RELIABILITY = {"A": 0.95, "B": 0.8, "C": 0.6, "D": 0.4, "E": 0.25, "F": 0.5}
 CREDIBILITY = {1: 0.95, 2: 0.8, 3: 0.6, 4: 0.4, 5: 0.2, 6: 0.5}

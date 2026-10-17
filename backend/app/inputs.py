@@ -26,6 +26,8 @@ CHANNEL_META: dict[str, dict] = {
     "head_of_state_directive": {"label": "Head-of-state directive", "level": "head_of_state", "weight": 1.0},
     "police_event": {"label": "Police event (public)", "level": "civil_authority", "weight": 0.6},
     "crisis_info": {"label": "Crisis information (public)", "level": "civil_authority", "weight": 0.7},
+    "road_situation": {"label": "Road situation (Trafikverket)", "level": "civil_authority", "weight": 0.6},
+    "thermal_anomaly": {"label": "Thermal anomaly (NASA FIRMS)", "level": "sensor", "weight": 0.5},
 }
 
 SEVERITY_RANK: dict[str, int] = {"info": 0, "advisory": 1, "warning": 2, "critical": 3}
@@ -178,19 +180,26 @@ TAG_WORDS: dict[str, str] = {
     "drone": "drone", "uav": "drone", "radar": "sensor", "comms": "comms", "radio": "comms", "power": "power", "grid": "power", "telecom": "telecom",
     "medevac": "medevac", "injur": "casualties", "casualt": "casualties", "wind": "weather", "storm": "weather", "snow": "weather", "ice": "weather",
     "cyber": "cyber", "malware": "cyber", "unknown": "unknown_track", "unidentified": "unknown_track", "priority": "priority", "bridge": "transport",
+    "explosion": "explosion", "exploded": "explosion", "blast": "explosion", "detonat": "explosion", "fire": "fire", "burning": "fire", "flames": "fire",
 }
 
 
 # Keywords match at the start of a word only ("ice" must not tag "police" as weather, "wind" not "window"); a few stems
 # carry explicit exclusions ("engine" is not "engineer", "wind" is not "window").
-TAG_EXCLUDE: dict[str, str] = {"engine": r"engine(?:er|ering)", "radio": r"radiolog", "wind": r"window", "ice": r"iceland"}
+TAG_EXCLUDE: dict[str, str] = {"engine": r"engine(?:er|ering)", "radio": r"radiolog", "wind": r"window", "ice": r"iceland",
+                               "fire": r"fire(?:arm|wall|work|fight|d\b|team|power)"}  # "fired a shot" or "firewall" is not a fire
 NEGATION = re.compile(r"\b(?:no|not|without|nor|zero|inga|ingen|inte)\s+(?:\w+\s+){0,1}$")
 
 
-def _matches(word: str, low: str) -> bool:
+CLAIM_TAGS = {"explosion", "fire"}  # claims of an event: "no fire" is not a fire report (other tags are topics: "no comms" is about comms)
+
+
+def _matches(word: str, low: str, negatable: bool = False) -> bool:
     for m in re.finditer(rf"\b{re.escape(word)}", low):
         ex = TAG_EXCLUDE.get(word)
         if ex and re.match(ex, low[m.start():]):
+            continue
+        if negatable and NEGATION.search(low[max(0, m.start() - 24):m.start()]):
             continue
         return True
     return False
@@ -211,7 +220,7 @@ def parse_input(body: InputIn, entity_ids: set[str], received_at: datetime) -> I
     low = text.lower()
     severity: Severity = body.severity or _severity_from_text(low)
     refs = list(dict.fromkeys(body.entityRefs + [eid for eid in entity_ids if re.search(rf"\b{re.escape(eid)}\b", low)]))
-    tags = list(dict.fromkeys(body.tags + [tag for word, tag in TAG_WORDS.items() if _matches(word, low)]))
+    tags = list(dict.fromkeys(body.tags + [tag for word, tag in TAG_WORDS.items() if _matches(word, low, tag in CLAIM_TAGS)]))
     position = body.position
     if position is None:
         for name, (lng, lat) in P.items():
