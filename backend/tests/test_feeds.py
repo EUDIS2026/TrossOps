@@ -1,0 +1,523 @@
+"""Live public-data feeds: parsers against trimmed REAL payloads (tests/fixtures/feeds), cache/stale/kill-switch
+semantics, and the /api router. No test touches the network: every feed gets an httpx.MockTransport."""
+from __future__ import annotations
+
+import json
+import threading
+import time
+from pathlib import Path
+
+import httpx
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app import feeds
+from app.feeds import adsb, ais, aisstream, krisinfo, openmeteo, polisen, smhi, swpc
+from app.feeds.base import FT_TO_M, KT_TO_MPS
+
+FIX = Path(__file__).parent / "fixtures" / "feeds"
+
+
+def fixture(name: str):
+    return json.loads((FIX / name).read_text(encoding="utf-8"))
+
+
+def mock(routes, calls: list | None = None) -> httpx.MockTransport:
+    """routes: list of (substring-of-url, response factory | fixture name | int status)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if calls is not None:
+            calls.append(url)
+        for needle, target in routes:
+            if needle in url:
+                if callable(target):
+                    return target(request)
+                if isinstance(target, int):
+                    return httpx.Response(target, text="upstream says no")
+                return httpx.Response(200, json=fixture(target))
+        raise AssertionError(f"unexpected request {url}")
+
+    return httpx.MockTransport(handler)
+
+
+def explode(request: httpx.Request) -> httpx.Response:
+    raise AssertionError(f"network call while it should be impossible: {request.url}")
+
+
+@pytest.fixture(autouse=True)
+def clean_feeds(monkeypatch):
+    for name in ("TROSSOPS_FEEDS", "VERCEL", "AISSTREAM_API_KEY", "TRAFIKVERKET_API_KEY", "OPENSKY_CLIENT_ID",
+                 "OPENSKY_CLIENT_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    for f in feeds.FEEDS.values():
+        f.reset()
+        f.transport = httpx.MockTransport(explode)
+    yield
+    for f in feeds.FEEDS.values():
+        f.reset()
+        f.transport = None
+
+
+# ---- kill switch / contract ---------------------------------------------------------------------------------------------
+def test_kill_switch_blocks_every_feed_without_network(monkeypatch):
+    monkeypatch.setenv("TROSSOPS_FEEDS", "off")
+    for f in feeds.FEEDS.values():
+        body = f.get()
+        assert body["status"] == "blocked", f.id
+        assert "disabled by configuration" in body["note"]
+        assert body["stale"] is False and body["fetchedAt"] is None
+        st = f.status()
+        assert set(st) >= {"id", "label", "category", "status", "lastOkAt", "lastError", "count", "licence", "url", "note", "stale"}
+        assert st["category"] in {"air", "sea", "weather", "civil", "space"}
+
+
+def test_status_before_first_fetch_is_not_presented_as_working():
+    assert feeds.POLISEN.status()["status"] == "adapter-only"
+    assert "not fetched" in feeds.POLISEN.status()["note"]
+
+
+def test_stale_on_error_serves_last_good_data():
+    state = {"fail": False}
+
+    def respond(request):
+        return httpx.Response(500, text="boom") if state["fail"] else httpx.Response(200, json=fixture("polisen.json"))
+
+    feed = feeds.POLISEN
+    feed.transport = mock([("polisen.se/api/events", respond)])
+    good = feed.get()
+    assert good["status"] == "working" and good["stale"] is False and good["count"] == 6
+    state["fail"] = True
+    feed.ttl_s = 0  # expire immediately
+    try:
+        bad = feed.get()
+    finally:
+        feed.ttl_s = polisen.PolisenFeed.ttl_s
+    assert bad["stale"] is True
+    assert bad["status"] == "partial"
+    assert "HTTP 500" in bad["lastError"]
+    assert [i["id"] for i in bad["items"]] == [i["id"] for i in good["items"]]
+    assert bad["fetchedAt"] == good["fetchedAt"]
+    assert feed.status()["lastOkAt"] == good["fetchedAt"]
+
+
+def test_error_without_data_is_blocked():
+    feeds.SWPC.transport = mock([("swpc.noaa.gov", 503)])
+    body = feeds.SWPC.get()
+    assert body["status"] == "blocked" and body["stale"] is False
+    assert "HTTP 503" in body["lastError"] and body["kp"] is None
+
+
+def test_error_backoff_does_not_hammer_upstream():
+    calls: list = []
+    feeds.SWPC.transport = mock([("swpc.noaa.gov", 503)], calls)
+    for _ in range(5):
+        feeds.SWPC.get()
+    assert len(calls) == 1
+
+
+def test_concurrent_requests_do_not_stampede_upstream():
+    calls: list = []
+
+    def slow(request):
+        time.sleep(0.2)
+        return httpx.Response(200, json=fixture("swpc_kp.json"))
+
+    feeds.SWPC.transport = mock([("swpc.noaa.gov", slow)], calls)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(feeds.SWPC.get()["status"])) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert results == ["working"] * 6
+    assert len(calls) == 1
+
+
+# ---- ADS-B -----------------------------------------------------------------------------------------------------------------
+def test_adsb_lol_parser_units_and_flags():
+    raw = {a["hex"]: a for a in fixture("adsb_lol.json")["ac"]}
+    jet = adsb.normalise_adsb_lol(raw["7809aa"])
+    assert jet["altM"] == round(31500 * FT_TO_M, 1) and jet["altSource"] == "geometric" and jet["altDatum"] == "MSL"
+    assert jet["speedMps"] == round(577.0 * KT_TO_MPS, 2)
+    assert jet["callsign"] == "CCA856" and jet["registration"] == "B-2038" and jet["type"] == "B77W"
+    assert jet["category"] == "A5" and jet["emergency"] is None and jet["military"] is False
+    ground = adsb.normalise_adsb_lol(raw["478899"])
+    assert ground["onGround"] is True and ground["altM"] == 0.0
+    baro_only = adsb.normalise_adsb_lol({"hex": "ABC123", "lat": 59.0, "lon": 18.0, "alt_baro": 10000, "baro_rate": 1000,
+                                         "gs": 100, "dbFlags": 1, "emergency": "general"})
+    assert baro_only["altM"] == 3048.0 and baro_only["altSource"] == "baro"
+    assert baro_only["verticalRateMps"] == 5.08 and baro_only["speedMps"] == 51.44
+    assert baro_only["military"] is True and baro_only["emergency"] == "general" and baro_only["id"] == "abc123"
+    assert adsb.normalise_adsb_lol({"hex": "x", "alt_baro": 1000}) is None  # no position
+
+
+def test_adsb_feed_merges_circles_and_classifies_gnss():
+    calls: list = []
+    feeds.ADSB.transport = mock([("api.adsb.lol", "adsb_lol.json")], calls)
+    body = feeds.ADSB.get()
+    assert body["status"] == "working" and body["primary"] == "adsb.lol"
+    assert len(calls) == len(adsb.CIRCLES)  # cold start fetches every circle once
+    ids = [a["id"] for a in body["items"]]
+    assert len(ids) == len(set(ids)) == 7  # the same fixture served for every circle merges by hex
+    samples = {s["hex"]: s for s in feeds.ADSB.gnss()}
+    assert "478899" not in samples  # on ground: excluded
+    assert samples["4d200e"]["degraded"] is True  # NIC 5 < 7
+    assert samples["7809aa"]["degraded"] is False  # NIC 8, NACp 9
+    assert not any(s["degraded"] for h, s in samples.items() if h != "4d200e")
+
+
+def test_gnss_degraded_thresholds():
+    base = {"source": "adsb.lol", "onGround": False, "positionType": "adsb_icao", "nic": 8, "nacp": 9}
+    assert adsb.is_gnss_sample(base) and not adsb.is_degraded(base)
+    assert adsb.is_degraded({**base, "nic": 6})
+    assert adsb.is_degraded({**base, "nacp": 7})
+    assert not adsb.is_gnss_sample({**base, "positionType": "mlat"})
+    assert not adsb.is_gnss_sample({**base, "source": "opensky"})
+
+
+def test_adsb_staggers_circles_after_cold_start_and_reports_rate_limit():
+    calls: list = []
+    feeds.ADSB.transport = mock([("api.adsb.lol", "adsb_lol.json")], calls)
+    feeds.ADSB.get()
+    calls.clear()
+    feeds.ADSB.transport = mock([("api.adsb.lol", 429)], calls)
+    feeds.ADSB.refresh(force=True)
+    assert len(calls) == 1  # only the stalest circle
+    body = feeds.ADSB.get()
+    assert body["status"] == "partial" and "429" in body["lastError"]
+    assert body["count"] == 7  # other circles' snapshots still published
+    calls.clear()
+    feeds.ADSB.refresh(force=True)
+    assert calls == []  # cooling down after the 429: no request sent
+    assert "paused" in feeds.ADSB.get()["lastError"]
+
+
+def test_adsb_falls_back_to_opensky():
+    feeds.ADSB.transport = mock([("api.adsb.lol", 429), ("opensky-network.org/api/states/all", "opensky.json")])
+    body = feeds.ADSB.get()
+    assert body["primary"] == "opensky" and body["status"] == "partial"
+    raw = {s[0]: s for s in fixture("opensky.json")["states"]}
+    items = {a["id"]: a for a in body["items"]}
+    assert set(items) <= set(raw)
+    air = items["4aca84"]
+    assert air["source"] == "opensky" and air["altM"] == 10401.3 and air["speedMps"] == 269.93
+    assert air["verticalRateMps"] == -9.1 and air["squawk"] == "2327"
+    assert items["478899"]["onGround"] is True and items["478899"]["altM"] == 0.0
+
+
+def test_adsb_trail_ring_respects_gap(monkeypatch):
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr(adsb.time, "time", lambda: clock["t"])
+    ac = {"id": "abc123", "lng": 18.0, "lat": 59.0, "altM": 1000.0, "seenS": 0.0}
+    for step in range(30):
+        clock["t"] += 5.0  # every 5 s: only every second sample is kept (>= 10 s apart)
+        feeds.ADSB.on_success({"items": [{**ac, "lng": 18.0 + step * 0.01}]})
+    trail = feeds.ADSB.trail("ABC123")
+    assert len(trail) == 15
+    assert all(b["t"] - a["t"] >= adsb.TRAIL_MIN_GAP_S for a, b in zip(trail, trail[1:]))
+    for step in range(30):
+        clock["t"] += 10.0
+        feeds.ADSB.on_success({"items": [ac]})
+    assert len(feeds.ADSB.trail("abc123")) == adsb.TRAIL_LEN
+
+
+# ---- AIS --------------------------------------------------------------------------------------------------------------------
+def test_digitraffic_parser_bbox_heading_and_metadata():
+    calls: list = []
+    feeds.AIS.transport = mock([("/api/ais/v1/locations", "digitraffic_locations.json"),
+                                ("/api/ais/v1/vessels", "digitraffic_vessels.json")], calls)
+    body = feeds.AIS.get()
+    assert body["status"] == "working"
+    items = {v["id"]: v for v in body["items"]}
+    assert 273611990 not in items  # lng 32.5: outside the box
+    assert len(items) == 5
+    assert items[273358970]["headingDeg"] is None  # 511 = not available
+    assert items[230174300]["headingDeg"] == 312
+    linea = items[230174300]
+    meta = {v["mmsi"]: v for v in fixture("digitraffic_vessels.json")}[230174300]
+    assert linea["name"] == meta["name"].strip() and linea["shipType"] == meta["shipType"]
+    assert linea["draughtM"] == round(meta["draught"] / 10, 1)
+    assert items[636025365]["speedMps"] == round(8.5 * KT_TO_MPS, 2)
+    assert all(v["source"] == "digitraffic" for v in items.values())
+    # metadata is cached for an hour: a second (expired) fetch only asks for locations
+    calls.clear()
+    feeds.AIS.refresh(force=True)
+    assert all("/locations" in c for c in calls)
+
+
+def test_digitraffic_requires_headers():
+    seen = {}
+
+    def respond(request):
+        seen.update(request.headers)
+        return httpx.Response(200, json=fixture("digitraffic_locations.json") if "locations" in str(request.url)
+                              else fixture("digitraffic_vessels.json"))
+
+    feeds.AIS.transport = mock([("meri.digitraffic.fi", respond)])
+    feeds.AIS.get()
+    assert seen["digitraffic-user"] == "TrossOps/1.0" and "gzip" in seen["accept-encoding"]
+    assert seen["user-agent"].startswith("TrossOps/1.0")
+
+
+def test_ais_labels_and_sentinels():
+    assert ais.ship_type_label(35) == "Military ops" and ais.ship_type_label(55) == "Law enforcement"
+    assert ais.ship_type_label(64) == "Passenger" and ais.ship_type_label(79) == "Cargo" and ais.ship_type_label(84) == "Tanker"
+    assert ais.ship_type_label(0) is None and ais.ship_type_label(None) is None
+    assert ais.heading(511) is None and ais.heading(0) == 0 and ais.course(360) is None
+    assert ais.speed_mps(102.3) is None and ais.nav_status_label(5) == "Moored"
+
+
+def test_ais_history_keeps_distinct_timestamps():
+    item = {"id": 123, "lng": 18.0, "lat": 59.0, "speedMps": 1.0, "courseDeg": 90.0, "headingDeg": None, "navStatus": 0,
+            "timestampMs": 1000, "source": "digitraffic"}
+    for ts in (1000, 1000, 2000, 1500, 3000):
+        feeds.AIS.record({**item, "timestampMs": ts})
+    assert [p["timestampMs"] for p in feeds.AIS.history(123)] == [1000, 2000, 3000]
+    for ts in range(4000, 4000 + 100 * 1000, 1000):
+        feeds.AIS.record({**item, "timestampMs": ts})
+    assert len(feeds.AIS.history(123)) == ais.HISTORY_LEN
+
+
+def test_merge_vessels_prefers_newest_and_fills_metadata():
+    a = {"id": 1, "name": "ALFA", "lng": 18.0, "lat": 59.0, "timestampMs": 1000, "destination": None, "source": "digitraffic"}
+    b = {"id": 1, "name": None, "lng": 18.1, "lat": 59.1, "timestampMs": 2000, "destination": "VISBY", "source": "aisstream"}
+    merged = ais.merge_vessels([a], [b, {"id": 2, "lng": 1, "lat": 2, "timestampMs": 5}])
+    one = next(v for v in merged if v["id"] == 1)
+    assert one["lng"] == 18.1 and one["name"] == "ALFA" and one["destination"] == "VISBY" and one["source"] == "aisstream"
+    assert len(merged) == 2
+
+
+def test_aisstream_adapter_only_without_key_and_message_parsing(monkeypatch):
+    st = feeds.AISSTREAM.get()
+    assert st["status"] == "adapter-only" and "aisstream.io" in st["note"]
+    # documented AISStream message shape (https://aisstream.io/documentation)
+    msg = {"MessageType": "PositionReport",
+           "MetaData": {"MMSI": 265000001, "ShipName": "TESTSHIP ", "latitude": 59.3, "longitude": 18.9,
+                        "time_utc": "2026-10-17 06:00:00.123456789 +0000 UTC"},
+           "Message": {"PositionReport": {"Cog": 120.5, "Sog": 10.0, "TrueHeading": 511, "NavigationalStatus": 0,
+                                          "Latitude": 59.3, "Longitude": 18.9, "UserID": 265000001}}}
+    stream = aisstream.AisStreamFeed(history_sink=feeds.AIS.record)
+    item = stream.handle_message(msg)
+    assert item["headingDeg"] is None and item["courseDeg"] == 120.5 and item["speedMps"] == round(10 * KT_TO_MPS, 2)
+    assert item["name"] == "TESTSHIP" and item["source"] == "aisstream" and item["navStatusLabel"] == "Under way using engine"
+    assert item["timestampMs"] == aisstream.parse_time_utc("2026-10-17 06:00:00.123456 +0000 UTC")
+    assert feeds.AIS.history(265000001)[0]["source"] == "aisstream"
+    outside = {**msg, "MetaData": {**msg["MetaData"]},
+               "Message": {"PositionReport": {**msg["Message"]["PositionReport"], "Longitude": 40.0}}}
+    assert stream.handle_message(outside) is None
+    # with a key but on Vercel: never starts a thread
+    monkeypatch.setenv("AISSTREAM_API_KEY", "k")
+    monkeypatch.setenv("VERCEL", "1")
+    st = stream.get()
+    assert st["status"] == "adapter-only" and "Vercel" in st["note"] and stream._thread is None
+
+
+# ---- SMHI ---------------------------------------------------------------------------------------------------------------------
+def smhi_obs_routes(fail_param: int | None = None):
+    def respond(request):
+        p = int(str(request.url).split("/parameter/")[1].split("/")[0])
+        if p == fail_param:
+            return httpx.Response(500)
+        return httpx.Response(200, json=fixture(f"smhi_obs_p{p}.json"))
+    return mock([("opendata-download-metobs.smhi.se", respond)])
+
+
+def test_smhi_observations_join_per_station():
+    feeds.SMHI_OBS.transport = smhi_obs_routes()
+    body = feeds.SMHI_OBS.get()
+    assert body["status"] == "working"
+    rows = {r["id"]: r for r in body["items"]}
+    abisko = rows["188790"]
+    assert abisko["name"] == "Abisko Aut" and abisko["airTempC"] == 2.9 and abisko["lat"] == 68.3538
+    raw4 = {s["key"]: s for s in fixture("smhi_obs_p4.json")["station"]}
+    assert abisko["windMps"] == float(raw4["188790"]["value"][0]["value"])
+    assert abisko["observedAt"].endswith("Z")
+    assert set(abisko) >= {"id", "name", "lng", "lat", "airTempC", "windMps", "windDirDeg", "gustMps", "visibilityM",
+                           "cloudPct", "precipMm", "observedAt"}
+    assert all(any(r[f] is not None for f in smhi.PARAMETERS.values()) for r in rows.values())
+
+
+def test_smhi_observations_partial_when_a_parameter_fails():
+    feeds.SMHI_OBS.transport = smhi_obs_routes(fail_param=12)
+    body = feeds.SMHI_OBS.get()
+    assert body["status"] == "partial" and body["stale"] is False and "parameter 12" in body["lastError"]
+    assert all(r["visibilityM"] is None for r in body["items"]) and body["count"] > 0
+
+
+def test_smhi_warnings():
+    raw = fixture("smhi_warnings.json")
+    feeds.SMHI_WARNINGS.transport = mock([("opendata-download-warnings.smhi.se", "smhi_warnings.json")])
+    body = feeds.SMHI_WARNINGS.get()
+    assert body["count"] == sum(len(e["warningAreas"]) for e in raw)
+    levels = {w["level"] for w in body["items"]}
+    assert levels <= {"yellow", "orange", "red", "message"} and "yellow" in levels
+    wind = next(w for w in body["items"] if w["eventCode"] == "WIND_SEA")
+    assert wind["validFrom"] and wind["validTo"] and wind["headline"] and wind["areaName"]
+    assert wind["geometry"]["type"] in {"Polygon", "MultiPolygon", "LineString"}
+    water = next(w for w in body["items"] if w["eventCode"] == "WATER_SHORTAGE")
+    assert water["level"] == "message" and water["validTo"] is None and water["description"]
+
+
+# ---- Open-Meteo --------------------------------------------------------------------------------------------------------------
+def test_open_meteo_grid_and_parser():
+    sample = fixture("openmeteo.json")
+    pts = [(17.0, 59.0), (18.0, 60.0), (19.0, 61.0)]
+    rows = openmeteo.normalise(pts, sample)
+    assert rows[0]["lng"] == 17.0 and rows[0]["windMps"] == sample[0]["current"]["wind_speed_10m"]
+    assert rows[0]["visibilityM"] == sample[0]["current"]["visibility"] and isinstance(rows[0]["weatherCode"], int)
+    with pytest.raises(Exception):
+        openmeteo.normalise(pts[:2], sample)
+    grid = openmeteo.grid_points()
+    assert len(grid) == 16 * 18 and grid[0] == (10.0, 55.0) and grid[-1] == (25.0, 68.6)
+
+    def respond(request):
+        n = len(request.url.params["latitude"].split(","))
+        assert n <= openmeteo.BATCH and request.url.params["wind_speed_unit"] == "ms"
+        assert request.url.params["models"] == "icon_seamless"
+        return httpx.Response(200, json=[sample[i % 3] for i in range(n)])
+
+    feeds.OPEN_METEO.transport = mock([("api.open-meteo.com", respond)])
+    body = feeds.OPEN_METEO.get()
+    assert body["status"] == "working" and len(body["points"]) == len(grid) and body["lngStep"] == openmeteo.LNG_STEP
+
+
+# ---- RainViewer / SWPC ---------------------------------------------------------------------------------------------------
+def test_rainviewer_frames():
+    feeds.RAINVIEWER.transport = mock([("api.rainviewer.com", "rainviewer.json")])
+    body = feeds.RAINVIEWER.get()
+    raw = fixture("rainviewer.json")
+    assert body["maxZoom"] == 7 and body["host"] == raw["host"]
+    assert len(body["frames"]) == len(raw["radar"]["past"])
+    first = body["frames"][0]
+    assert first["tileUrl"] == f"{raw['host']}{raw['radar']['past'][0]['path']}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
+    assert body["latest"]["time"] == raw["radar"]["past"][-1]["time"]
+
+
+def test_swpc_kp_current_and_legacy_format():
+    body = swpc.normalise(fixture("swpc_kp.json"))
+    raw = fixture("swpc_kp.json")
+    assert body["kp"] == raw[-1]["Kp"] and len(body["series24h"]) == 8
+    assert body["time"].endswith("Z")
+    legacy = [["time_tag", "Kp", "a_running", "station_count"], ["2026-10-16 18:00:00.000", "5.67", "48", "8"]]
+    storm = swpc.normalise(legacy)
+    assert storm["kp"] == 5.67 and storm["stormScale"] == "G1"
+    assert "HF and GNSS degradation likely at high latitudes" in storm["impact"]
+
+
+# ---- Civil -------------------------------------------------------------------------------------------------------------------
+def test_polisen_parsing():
+    assert polisen.parse_gps("59.602496,18.138438") == (18.138438, 59.602496)
+    assert polisen.parse_gps("garbage") == (None, None) and polisen.parse_gps(None) == (None, None)
+    assert polisen.parse_datetime("2026-09-30 0:00:12 +02:00") == "2026-09-30T00:00:12+02:00"
+    assert polisen.parse_datetime("2026-1-6 9:05:00 +01:00") == "2026-01-06T09:05:00+01:00"
+    feeds.POLISEN.transport = mock([("polisen.se/api/events", "polisen.json")])
+    items = {e["id"]: e for e in feeds.POLISEN.get()["items"]}
+    murder = items[656506]
+    assert murder["url"].startswith("https://polisen.se/aktuellt/handelser/")
+    assert murder["lng"] == 18.138438 and murder["lat"] == 59.602496
+    assert murder["precision"] == "county" and murder["placeName"] == "Stockholm"
+    assert "shooting" in murder["keywords"]
+    assert "fire" in items[656391]["keywords"]
+    assert polisen.keywords("Drönare observerad över hamnen") == ["drone"]
+    assert polisen.normalise({"id": 1, "location": {"name": "Ronneby", "gps": "56.2,15.3"}})["precision"] == "municipality"
+
+
+def test_krisinformation_news_and_vma():
+    feeds.KRISINFO.transport = mock([("/v3/news", "krisinfo_news.json"), ("/v3/vmas", "krisinfo_vmas.json")])
+    body = feeds.KRISINFO.get()
+    assert body["status"] == "working" and body["vmaCount"] == 0 and body["newsCount"] == 1
+    news = body["items"][0]
+    raw = fixture("krisinfo_news.json")[0]
+    assert news["kind"] == "news" and news["headline"] == raw["headline"] and news["url"] == raw["web"]
+    assert news["areas"] == ["Sverige"] and news["lng"] is None
+    # VMA in the documented v3 shape with coordinates (no live VMA was active when fixtures were captured)
+    vma = krisinfo.normalise({"Identifier": "vma-1", "Headline": "VMA", "Area": [
+        {"Type": "County", "Description": "Stockholms län", "Coordinate": "59.33,18.06 0"},
+        {"type": "Municipality", "description": "Nacka", "coordinateObject": {"latitude": 59.31, "longitude": 18.16}}]}, "vma")
+    assert vma["kind"] == "vma" and vma["areas"] == ["Stockholms län", "Nacka"]
+    assert vma["lng"] == pytest.approx(18.11) and vma["lat"] == pytest.approx(59.32)
+    assert krisinfo.area_point({"coordinate": "18.06 59.33"}) == (18.06, 59.33)
+
+
+def test_krisinformation_partial_when_vma_fails():
+    feeds.KRISINFO.transport = mock([("/v3/news", "krisinfo_news.json"), ("/v3/vmas", 502)])
+    body = feeds.KRISINFO.get()
+    assert body["status"] == "partial" and "vmas" in body["lastError"] and body["count"] == 1
+
+
+def test_trafikverket_adapter_only_then_parses(monkeypatch):
+    body = feeds.TRAFIKVERKET.get()
+    assert body["status"] == "adapter-only" and "TRAFIKVERKET_API_KEY" in body["note"] and body["items"] == []
+    monkeypatch.setenv("TRAFIKVERKET_API_KEY", "secret")
+    seen = {}
+
+    def respond(request):
+        seen["body"] = request.content.decode()
+        return httpx.Response(200, json=fixture("trafikverket_documented_shape.json"))
+
+    feeds.TRAFIKVERKET.transport = mock([("api.trafikinfo.trafikverket.se", respond)])
+    body = feeds.TRAFIKVERKET.get()
+    assert 'authenticationkey="secret"' in seen["body"] and 'objecttype="Situation"' in seen["body"]
+    items = {i["id"]: i for i in body["items"]}
+    acc = items["SE_STA_TRISSID_1_0000001"]
+    assert acc["type"] == "Olycka" and acc["lng"] == 18.0123 and acc["lat"] == 59.3456 and acc["roadNumber"] == "E4"
+    closure = items["SE_STA_TRISSID_1_0000002"]
+    assert closure["message"] == "Vägen avstängd" and closure["lng"] == 18.1 and closure["end"] is None
+
+
+def test_trafikverket_invalid_key_is_blocked(monkeypatch):
+    monkeypatch.setenv("TRAFIKVERKET_API_KEY", "bad")
+    feeds.TRAFIKVERKET.transport = mock([("api.trafikinfo.trafikverket.se",
+                                          lambda r: httpx.Response(401, json=fixture("trafikverket_401.json")))])
+    body = feeds.TRAFIKVERKET.get()
+    assert body["status"] == "blocked" and "Invalid authentication" in body["lastError"]
+
+
+# ---- Router -------------------------------------------------------------------------------------------------------------------
+@pytest.fixture()
+def api():
+    from app.routes_live import router
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as c:
+        yield c
+
+
+def test_router_sources_with_kill_switch(api, monkeypatch):
+    monkeypatch.setenv("TROSSOPS_FEEDS", "off")
+    body = api.get("/api/sources").json()
+    assert body["disabled"] is True and len(body["sources"]) == len(feeds.FEEDS)
+    assert {s["status"] for s in body["sources"]} == {"blocked"}
+    assert any("Källa: SMHI" in line for line in body["attribution"])
+    for path in ("/api/live/aircraft", "/api/live/gnss", "/api/live/vessels", "/api/env/observations", "/api/env/warnings",
+                 "/api/env/grid", "/api/env/radar", "/api/env/space", "/api/civil/police", "/api/civil/crisis",
+                 "/api/civil/traffic"):
+        r = api.get(path)
+        assert r.status_code == 200, path
+        payload = r.json()
+        assert {"status", "source", "licence", "fetchedAt", "stale"} <= set(payload), path
+        assert payload["status"] == "blocked", path
+    assert api.get("/api/live/aircraft/abc123/trail").status_code == 404
+    assert api.get("/api/live/vessels/123/history").status_code == 404
+
+
+def test_router_live_payloads(api):
+    feeds.ADSB.transport = mock([("api.adsb.lol", "adsb_lol.json")])
+    feeds.AIS.transport = mock([("/api/ais/v1/locations", "digitraffic_locations.json"),
+                                ("/api/ais/v1/vessels", "digitraffic_vessels.json")])
+    feeds.POLISEN.transport = mock([("polisen.se/api/events", "polisen.json")])
+    aircraft = api.get("/api/live/aircraft").json()
+    assert aircraft["status"] == "working" and aircraft["count"] == 7 and aircraft["fetchedAt"]
+    assert api.get("/api/live/aircraft/7809AA/trail").json()["points"]
+    gnss = api.get("/api/live/gnss").json()
+    assert gnss["degradedCount"] == 1 and gnss["count"] == len(gnss["samples"])
+    vessels = api.get("/api/live/vessels").json()
+    assert vessels["count"] == 5 and vessels["streams"]["aisstream"]["status"] == "adapter-only"
+    assert api.get("/api/live/vessels/230174300/history").json()["points"]
+    police = api.get("/api/civil/police").json()
+    assert police["status"] == "working" and police["attribution"] == "Källa: Polisen (polisen.se)"
+    sources = api.get("/api/sources?probe=false").json()["sources"]
+    by_id = {s["id"]: s for s in sources}
+    assert by_id["adsb"]["status"] == "working" and by_id["smhi-obs"]["status"] == "adapter-only"

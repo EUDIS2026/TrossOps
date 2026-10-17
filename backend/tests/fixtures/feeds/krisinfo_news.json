@@ -1,0 +1,33 @@
+[
+ {
+  "identifier": "1194",
+  "contentId": 1194,
+  "contentTypeName": "newspage",
+  "updated": "2026-10-16T21:26:38+02:00",
+  "published": "2026-10-15T12:33:48+02:00",
+  "headline": "Här ska vården stärkas vid krig",
+  "preamble": "Norra Sverige, Gotland och ostkusten är tre områden där vårdbehovet väntas bli störst om det blir krig i Sverige. Samtidigt startar planering för beredskapssjukhus i norra Sverige.",
+  "bodyText": "Socialstyrelsen har pekat ut tre områden där behoven för vård vid krig förväntas bli störst. Det gäller norra Sverige, Gotland och ostkusten. Socialstyrelsen, Försvarsmakten och Totalförsvarets forskningsinstitut har analyserat hur ett krig kan påverka Sverige, och vilka krav det ställer på sjukvården.\nPlanering för beredskapssjukhus i norra Sverige\nSamtidigt startar arbetet med att planera för beredskapssjukhus i de fyra norra regionerna. Norrbotten, Västerbotten, Västernorrland och Jämtland Härjedalen blir först ut med att utveckla beredskapssjukhus. Det kommer inte byggas nya sjukhus, tanken är att beredskapssjukhus ska bygga på vården som redan finns. Planeringen handlar om att se över personal, lokaler, utrustning och styrning. \n \n– Sverige ser olika ut och behoven vid krig kommer också att skilja sig åt. Därför söker vi inte en enda lösning. Vi behöver tillsammans med regionerna ta reda på vilken förmåga som krävs och hur den kan byggas upp där den behövs, säger Björn Eriksson, generaldirektör för Socialstyrelsen i ett pressmeddelande.\n",
+  "imageLink": "https://www.krisinformation.se/globalassets/aktuellt/nyheter/sjukhus_ima245075_johner_1720x968.webp",
+  "links": [
+   {
+    "text": "Socialstyrelsen: Så här behöver vården stärkas vid krig",
+    "url": "https://www.socialstyrelsen.se/om-socialstyrelsen/pressrum/press/ny-planering-visar-var-varden-maste-starkas-vid-krig/"
+   }
+  ],
+  "area": [
+   {
+    "type": "Country",
+    "description": "Sverige",
+    "coordinate": null,
+    "coordinateObject": null
+   }
+  ],
+  "web": "https://www.krisinformation.se/aktuellt/nyheter/har-ska-varden-starkas-vid-krig/",
+  "language": "sv",
+  "event": "News",
+  "senderName": "",
+  "bodyLinks": [],
+  "isPinned": false
+ }
+]

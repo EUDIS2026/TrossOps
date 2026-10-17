@@ -17,6 +17,7 @@ def engine(tmp_path):
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("TROSSOPS_DB_PATH", str(tmp_path / "api.sqlite"))
     monkeypatch.setenv("TROSSOPS_START_S", "1000")
+    monkeypatch.setenv("TROSSOPS_FEEDS", "off")
     for mod in [m for m in list(sys.modules) if m.startswith("app.")]:
         del sys.modules[mod]
     from fastapi.testclient import TestClient

@@ -1,0 +1,144 @@
+{
+ "type": "FeatureCollection",
+ "dataUpdatedTime": "2026-10-16T23:04:54Z",
+ "features": [
+  {
+   "mmsi": 230174300,
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     21.247605,
+     60.507248
+    ]
+   },
+   "properties": {
+    "mmsi": 230174300,
+    "sog": 0.0,
+    "cog": 326.7,
+    "navStat": 0,
+    "rot": 0,
+    "posAcc": false,
+    "raim": false,
+    "heading": 312,
+    "timestamp": 37,
+    "timestampExternal": 1792191878981
+   }
+  },
+  {
+   "mmsi": 273397140,
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     28.563618,
+     60.615553
+    ]
+   },
+   "properties": {
+    "mmsi": 273397140,
+    "sog": 0.0,
+    "cog": 360.0,
+    "navStat": 0,
+    "rot": 0,
+    "posAcc": true,
+    "raim": false,
+    "heading": 147,
+    "timestamp": 59,
+    "timestampExternal": 1792169579105
+   }
+  },
+  {
+   "mmsi": 636025365,
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     21.930028,
+     59.152608
+    ]
+   },
+   "properties": {
+    "mmsi": 636025365,
+    "sog": 8.5,
+    "cog": 49.6,
+    "navStat": 0,
+    "rot": 7,
+    "posAcc": false,
+    "raim": false,
+    "heading": 55,
+    "timestamp": 40,
+    "timestampExternal": 1792191879753
+   }
+  },
+  {
+   "mmsi": 273358970,
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     28.310157,
+     59.677667
+    ]
+   },
+   "properties": {
+    "mmsi": 273358970,
+    "sog": 0.1,
+    "cog": 360.0,
+    "navStat": 3,
+    "rot": -128,
+    "posAcc": true,
+    "raim": true,
+    "heading": 511,
+    "timestamp": 57,
+    "timestampExternal": 1792168977698
+   }
+  },
+  {
+   "mmsi": 273619740,
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     28.301908,
+     59.813587
+    ]
+   },
+   "properties": {
+    "mmsi": 273619740,
+    "sog": 5.3,
+    "cog": 154.8,
+    "navStat": 1,
+    "rot": -128,
+    "posAcc": true,
+    "raim": true,
+    "heading": 511,
+    "timestamp": 55,
+    "timestampExternal": 1792172695994
+   }
+  },
+  {
+   "mmsi": 273611990,
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     32.53231,
+     57.674373
+    ]
+   },
+   "properties": {
+    "mmsi": 273611990,
+    "sog": 81.6,
+    "cog": 196.3,
+    "navStat": 0,
+    "rot": 0,
+    "posAcc": false,
+    "raim": true,
+    "heading": 270,
+    "timestamp": 3,
+    "timestampExternal": 1792191887554
+   }
+  }
+ ]
+}

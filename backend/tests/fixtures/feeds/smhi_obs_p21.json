@@ -1,0 +1,82 @@
+{
+ "updated": 1792191600000,
+ "parameter": {
+  "key": "21",
+  "name": "Byvind",
+  "summary": "max, 1 gång/tim",
+  "unit": "meter per sekund"
+ },
+ "period": {
+  "key": "latest-hour",
+  "from": 1792188001000,
+  "to": 1792191600000,
+  "summary": "Data från senaste timmen",
+  "sampling": "1 timme"
+ },
+ "link": [
+  {
+   "href": "https://opendata-download-metobs.smhi.se/api/version/1.0/parameter/21/station-set/all/period/latest-hour/data.json",
+   "rel": "data",
+   "type": "application/json"
+  }
+ ],
+ "station": [
+  {
+   "key": "188790",
+   "name": "Abisko Aut",
+   "owner": "Polarforskningssekretariatet",
+   "ownerCategory": "CLIMATE",
+   "measuringStations": "CORE",
+   "from": 1538352000000,
+   "to": 1792192887000,
+   "height": 392.235,
+   "latitude": 68.3538,
+   "longitude": 18.8164,
+   "value": [
+    {
+     "date": 1792191600000,
+     "value": "12.8",
+     "quality": "G"
+    }
+   ]
+  },
+  {
+   "key": "97280",
+   "name": "Adelsö A",
+   "owner": "SMHI",
+   "ownerCategory": "CLIMATE",
+   "measuringStations": "CORE",
+   "from": 817776000000,
+   "to": 1792192887000,
+   "height": 5.612,
+   "latitude": 59.3579,
+   "longitude": 17.5213,
+   "value": [
+    {
+     "date": 1792191600000,
+     "value": "9.6",
+     "quality": "G"
+    }
+   ]
+  },
+  {
+   "key": "167710",
+   "name": "Arjeplog A",
+   "owner": "SMHI",
+   "ownerCategory": "CLIMATE",
+   "measuringStations": "CORE",
+   "from": 959817600000,
+   "to": 1792192887000,
+   "height": 430.839,
+   "latitude": 66.0513,
+   "longitude": 17.8396,
+   "value": [
+    {
+     "date": 1792191600000,
+     "value": "6.1",
+     "quality": "G"
+    }
+   ]
+  }
+ ]
+}

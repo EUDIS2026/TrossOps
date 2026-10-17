@@ -1,0 +1,36 @@
+{
+ "_fixture_note": "NOT a captured response: written from the Trafikverket API Situation schema 1.5 documentation because no API key was available. The 401 fixture next to it is a real capture.",
+ "RESPONSE": {
+  "RESULT": [
+   {
+    "Situation": [
+     {
+      "Deviation": [
+       {
+        "Id": "SE_STA_TRISSID_1_0000001",
+        "MessageType": "Olycka",
+        "Message": "Olycka med flera fordon.",
+        "SeverityCode": 4,
+        "SeverityText": "Stor påverkan",
+        "RoadNumber": "E4",
+        "LocationDescriptor": "E4 från Trafikplats A till Trafikplats B",
+        "StartTime": "2026-10-17T06:12:00.000+02:00",
+        "EndTime": "2026-10-17T09:00:00.000+02:00",
+        "Geometry": {"Point": {"SWEREF99TM": "POINT (674000 6580000)", "WGS84": "POINT (18.0123 59.3456)"}}
+       },
+       {
+        "Id": "SE_STA_TRISSID_1_0000002",
+        "MessageType": "Restriktion",
+        "Header": "Vägen avstängd",
+        "SeverityText": "Mycket stor påverkan",
+        "RoadNumber": "Väg 73",
+        "StartTime": "2026-10-17T05:00:00.000+02:00",
+        "Geometry": {"WGS84": "LINESTRING (18.1 59.1, 18.2 59.0)"}
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ }
+}

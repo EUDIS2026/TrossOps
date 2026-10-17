@@ -1,0 +1,74 @@
+[
+ {
+  "id": 656506,
+  "datetime": "2026-10-16 21:42:16 +02:00",
+  "name": "16 oktober 21.08, Mord/dråp, försök, Stockholm",
+  "summary": "En person skadas allvarligt vid en skottlossning i Solberga.",
+  "url": "/aktuellt/handelser/2026/oktober/16/16-oktober-21.08-morddrap-forsok-stockholm/",
+  "type": "Mord/dråp, försök",
+  "location": {
+   "name": "Stockholms län",
+   "gps": "59.602496,18.138438"
+  }
+ },
+ {
+  "id": 656501,
+  "datetime": "2026-10-16 21:00:53 +02:00",
+  "name": "16 oktober 18.55, Misshandel, Haninge",
+  "summary": "Flera ungdomar kontrolleras efter uppgifter om en misshandel i Brandbergen.",
+  "url": "/aktuellt/handelser/2026/oktober/16/16-oktober-18.55-misshandel-haninge/",
+  "type": "Misshandel",
+  "location": {
+   "name": "Stockholms län",
+   "gps": "59.602496,18.138438"
+  }
+ },
+ {
+  "id": 656391,
+  "datetime": "2026-10-16 6:41:48 +02:00",
+  "name": "16 oktober 04.33, Brand, Västervik",
+  "summary": "Larm om bilbrand, ingen misstanke om brott",
+  "url": "/aktuellt/handelser/2026/oktober/16/16-oktober-04.33-brand-vastervik/",
+  "type": "Brand",
+  "location": {
+   "name": "Kalmar län",
+   "gps": "57.235016,16.184935"
+  }
+ },
+ {
+  "id": 656054,
+  "datetime": "2026-10-13 10:16:48 +02:00",
+  "name": "13 oktober 04.15, Skadegörelse, Stockholm",
+  "summary": "En man tömde en brandsläckare inne i en butik på Norrmalm.",
+  "url": "/aktuellt/handelser/2026/oktober/13/13-oktober-04.15-skadegorelse-stockholm/",
+  "type": "Skadegörelse",
+  "location": {
+   "name": "Stockholms län",
+   "gps": "59.602496,18.138438"
+  }
+ },
+ {
+  "id": 654737,
+  "datetime": "2026-09-30 0:00:12 +02:00",
+  "name": "29 september 23.51, Räddningsinsats, Strömsund",
+  "summary": "Broras, E45, Strömsund.",
+  "url": "/aktuellt/handelser/2026/september/29/29-september-23.51-raddningsinsats-stromsund/",
+  "type": "Räddningsinsats",
+  "location": {
+   "name": "Jämtlands län",
+   "gps": "63.171192,14.95918"
+  }
+ },
+ {
+  "id": 656484,
+  "datetime": "2026-10-16 18:29:14 +02:00",
+  "name": "16 oktober 18.18, Trafikolycka, Västervik",
+  "summary": "Mc och hjort i olycka, Hjorted.",
+  "url": "/aktuellt/handelser/2026/oktober/16/16-oktober-18.18-trafikolycka-vastervik/",
+  "type": "Trafikolycka",
+  "location": {
+   "name": "Kalmar län",
+   "gps": "57.235016,16.184935"
+  }
+ }
+]

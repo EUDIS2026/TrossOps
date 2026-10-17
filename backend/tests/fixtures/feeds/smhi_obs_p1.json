@@ -1,0 +1,114 @@
+{
+ "updated": 1792188000000,
+ "parameter": {
+  "key": "1",
+  "name": "Lufttemperatur",
+  "summary": "momentanvärde, 1 gång/tim",
+  "unit": "celsius"
+ },
+ "period": {
+  "key": "latest-hour",
+  "from": 1792184401000,
+  "to": 1792188000000,
+  "summary": "Data från senaste timmen",
+  "sampling": "Ej angivet"
+ },
+ "link": [
+  {
+   "href": "https://opendata-download-metobs.smhi.se/api/version/1.0/parameter/1/station-set/all/period/latest-hour/data.json",
+   "rel": "data",
+   "type": "application/json"
+  }
+ ],
+ "station": [
+  {
+   "key": "188790",
+   "name": "Abisko Aut",
+   "owner": "Polarforskningssekretariatet",
+   "ownerCategory": "CLIMATE",
+   "measuringStations": "CORE",
+   "from": 1538352000000,
+   "to": 1792189216000,
+   "height": 392.235,
+   "latitude": 68.3538,
+   "longitude": 18.8164,
+   "value": [
+    {
+     "date": 1792188000000,
+     "value": "2.9",
+     "quality": "G"
+    }
+   ]
+  },
+  {
+   "key": "158990",
+   "name": "Abraur",
+   "owner": "SMHI",
+   "ownerCategory": "CLIMATE",
+   "measuringStations": "CORE",
+   "from": 812505600000,
+   "to": 1792189216000,
+   "height": 368.079,
+   "latitude": 65.9857,
+   "longitude": 18.9195,
+   "value": []
+  },
+  {
+   "key": "97280",
+   "name": "Adelsö A",
+   "owner": "SMHI",
+   "ownerCategory": "CLIMATE",
+   "measuringStations": "CORE",
+   "from": 817776000000,
+   "to": 1792189216000,
+   "height": 5.612,
+   "latitude": 59.3579,
+   "longitude": 17.5213,
+   "value": [
+    {
+     "date": 1792188000000,
+     "value": "13.1",
+     "quality": "G"
+    }
+   ]
+  },
+  {
+   "key": "9013",
+   "name": "Alskog",
+   "owner": "SMHI",
+   "ownerCategory": "NATIONAL",
+   "measuringStations": "ADDITIONAL",
+   "from": 1751328000000,
+   "to": 1792189216000,
+   "height": 0.0,
+   "latitude": 57.3271,
+   "longitude": 18.6162,
+   "value": [
+    {
+     "date": 1792188000000,
+     "value": "11.3",
+     "quality": "Y"
+    }
+   ]
+  },
+  {
+   "key": "167710",
+   "name": "Arjeplog A",
+   "owner": "SMHI",
+   "ownerCategory": "CLIMATE",
+   "measuringStations": "CORE",
+   "from": 959817600000,
+   "to": 1792189216000,
+   "height": 430.839,
+   "latitude": 66.0513,
+   "longitude": 17.8396,
+   "value": [
+    {
+     "date": 1792188000000,
+     "value": "2.3",
+     "quality": "G"
+    }
+   ]
+  }
+ ]
+}

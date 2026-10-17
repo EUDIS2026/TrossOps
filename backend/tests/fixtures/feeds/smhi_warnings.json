@@ -1,0 +1,493 @@
+[
+ {
+  "id": 3372,
+  "normalProbability": true,
+  "event": {
+   "sv": "Medelvind till havs",
+   "en": "Wind at sea",
+   "code": "WIND_SEA",
+   "mhoClassification": {
+    "sv": "Meteorologi",
+    "en": "Meteorology",
+    "code": "MET"
+   }
+  },
+  "descriptions": [],
+  "warningAreas": [
+   {
+    "id": 10673,
+    "approximateStart": "2026-10-17T08:00:00.000Z",
+    "approximateEnd": "2026-10-17T20:00:00.000Z",
+    "published": "2026-10-16T13:25:45.681Z",
+    "normalProbability": true,
+    "pushNotice": true,
+    "areaName": {
+     "sv": "Norra Östersjön",
+     "en": "Northern Baltic"
+    },
+    "warningLevel": {
+     "sv": "Gul",
+     "en": "Yellow",
+     "code": "YELLOW"
+    },
+    "eventDescription": {
+     "sv": "Kuling 14-17 m/s",
+     "en": "Near gale 14-17 m/s",
+     "code": "GALE_LOW"
+    },
+    "affectedAreas": [
+     {
+      "id": 48,
+      "sv": "Norra Östersjön",
+      "en": "Northern Baltic"
+     }
+    ],
+    "descriptions": [
+     {
+      "title": {
+       "sv": "Händelsebeskrivning",
+       "en": "Description of incident",
+       "code": "INCIDENT"
+      },
+      "text": {
+       "sv": "Lördag förmiddag nord 14-17 m/s.",
+       "en": "Saturday late morning north 14-17 m/s."
+      }
+     },
+     {
+      "title": {
+       "sv": "Vad ska jag tänka på?",
+       "en": "What should I think about?",
+       "code": "AFFECT"
+      },
+      "text": {
+       "sv": "Förbered besättning och fartyg för mycket vind och sjö, och överväg om det är lämpligt att ge sig ut till sjöss.\nTänk på att byvinden ofta är betydligt högre än medelvinden.",
+       "en": "Pay close attention to the marine forecast and prepare crew and vessel for high winds and seas.\nKeep in mind that the wind gusts are often significantly higher than the average wind."
+      }
+     },
+     {
+      "title": {
+       "sv": "Var?",
+       "en": "Where?",
+       "code": "WHERE"
+      },
+      "text": {
+       "sv": "Norra Östersjön",
+       "en": "Northern Baltic"
+      }
+     }
+    ],
+    "area": {
+     "crs": {
+      "type": "name",
+      "properties": {
+       "name": "EPSG:4326"
+      }
+     },
+     "type": "Feature",
+     "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+       [
+        [
+         19.0864,
+         59.73366
+        ],
+        [
+         19.0864,
+         59.77626
+        ],
+        [
+         19.13568,
+         59.8007
+        ],
+        [
+         19.15565,
+         59.83185
+        ],
+        [
+         20.00262,
+         59.82985
+        ],
+        [
+         20.00301,
+         59.82985
+        ],
+        [
+         19.0864,
+         59.73366
+        ]
+       ]
+      ]
+     },
+     "properties": {
+      "en": "Northern Baltic",
+      "id": 48,
+      "sv": "Norra Östersjön",
+      "code": "SWE_SEA_DISTRICTS"
+     }
+    },
+    "created": "2026-10-16T07:15:48.482Z"
+   },
+   {
+    "id": 10674,
+    "approximateStart": "2026-10-17T09:00:00.000Z",
+    "approximateEnd": "2026-10-17T23:00:00.000Z",
+    "published": "2026-10-16T13:25:45.681Z",
+    "normalProbability": true,
+    "pushNotice": true,
+    "areaName": {
+     "sv": "Mellersta Östersjön",
+     "en": "Central Baltic"
+    },
+    "warningLevel": {
+     "sv": "Gul",
+     "en": "Yellow",
+     "code": "YELLOW"
+    },
+    "eventDescription": {
+     "sv": "Kuling 14-17 m/s",
+     "en": "Near gale 14-17 m/s",
+     "code": "GALE_LOW"
+    },
+    "affectedAreas": [
+     {
+      "id": 49,
+      "sv": "Mellersta Östersjön",
+      "en": "Central Baltic"
+     }
+    ],
+    "descriptions": [
+     {
+      "title": {
+       "sv": "Händelsebeskrivning",
+       "en": "Description of incident",
+       "code": "INCIDENT"
+      },
+      "text": {
+       "sv": "Lördag förmiddag nord 14-17 m/s.",
+       "en": "Saturday late morning north 14-17 m/s."
+      }
+     },
+     {
+      "title": {
+       "sv": "Vad ska jag tänka på?",
+       "en": "What should I think about?",
+       "code": "AFFECT"
+      },
+      "text": {
+       "sv": "Förbered besättning och fartyg för mycket vind och sjö, och överväg om det är lämpligt att ge sig ut till sjöss.\nTänk på att byvinden ofta är betydligt högre än medelvinden.",
+       "en": "Pay close attention to the marine forecast and prepare crew and vessel for high winds and seas.\nKeep in mind that the wind gusts are often significantly higher than the average wind."
+      }
+     },
+     {
+      "title": {
+       "sv": "Var?",
+       "en": "Where?",
+       "code": "WHERE"
+      },
+      "text": {
+       "sv": "Mellersta Östersjön",
+       "en": "Central Baltic"
+      }
+     }
+    ],
+    "area": {
+     "crs": {
+      "type": "name",
+      "properties": {
+       "name": "EPSG:4326"
+      }
+     },
+     "type": "Feature",
+     "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+       [
+        [
+         16.7808,
+         58.1086
+        ],
+        [
+         16.80462,
+         58.1165
+        ],
+        [
+         16.82864,
+         58.12192
+        ],
+        [
+         16.83944,
+         58.12885
+        ],
+        [
+         16.84838,
+         58.14448
+        ],
+        [
+         16.8537,
+         58.15376
+        ],
+        [
+         16.7808,
+         58.1086
+        ]
+       ]
+      ]
+     },
+     "properties": {
+      "en": "Central Baltic",
+      "id": 49,
+      "sv": "Mellersta Östersjön",
+      "code": "SWE_SEA_DISTRICTS"
+     }
+    },
+    "created": "2026-10-16T07:15:48.483Z"
+   }
+  ]
+ },
+ {
+  "id": 3373,
+  "normalProbability": true,
+  "event": {
+   "sv": "Högt vattenstånd",
+   "en": "High sea level",
+   "code": "HIGH_SEALEVEL",
+   "mhoClassification": {
+    "sv": "Oceanografi",
+    "en": "Oceanography",
+    "code": "OCE"
+   }
+  },
+  "descriptions": [],
+  "warningAreas": [
+   {
+    "id": 10677,
+    "approximateStart": "2026-10-17T17:00:00.703Z",
+    "approximateEnd": "2026-10-18T05:00:00.773Z",
+    "published": "2026-10-16T13:52:37.810Z",
+    "normalProbability": true,
+    "pushNotice": true,
+    "areaName": {
+     "sv": "Skånes sydkust",
+     "en": "South coast of Skåne"
+    },
+    "warningLevel": {
+     "sv": "Gul",
+     "en": "Yellow",
+     "code": "YELLOW"
+    },
+    "eventDescription": {
+     "sv": "Högt vattenstånd",
+     "en": "High sea level",
+     "code": "HIGH_SEALEVEL"
+    },
+    "affectedAreas": [
+     {
+      "id": 12,
+      "sv": "Skåne län",
+      "en": "Skåne County"
+     }
+    ],
+    "descriptions": [
+     {
+      "title": {
+       "sv": "Vad händer?",
+       "en": "What happens?",
+       "code": "HAPPENS"
+      },
+      "text": {
+       "sv": "Under lördagen stiger vattenståndet för att sent lördag kväll och natt mot söndag kulminera omkring 90-110 cm i RH 2000. Högst nivåer väntas i den västra delen av varningsområdet. Åter sjunkande från tidigt söndag morgon.\n",
+       "en": "During Saturday the sea level will rise to culminate late Saturday evening and night into Sunday at around 90-110 cm in RH 2000. Highest levels are expected in the western part of the warning area. Dropping again from early Sunday morning.\n"
+      }
+     },
+     {
+      "title": {
+       "sv": "Händelsebeskrivning",
+       "en": "Description of incident",
+       "code": "INCIDENT"
+      },
+      "text": {
+       "sv": "Högt vattenstånd och blåsigt väder längs kusten ger lokalt risk för översvämning och erosion.",
+       "en": "High sea levels and windy weather along the coast pose a local risk of flooding and erosion."
+      }
+     },
+     {
+      "title": {
+       "sv": "Vad ska jag tänka på?",
+       "en": "What should I think about?",
+       "code": "AFFECT"
+      },
+      "text": {
+       "sv": "Lågt liggande bryggor och kajer, vägar eller byggnader kan översvämmas.\nDen segelfria höjden under broar minskar.\nKänsliga kuststräckor kan utsättas för erosion.\nFörtöjda fartyg riskerar att ta skada.",
+       "en": "Low lying wharfs, jetties, roads or buildings may be exposed to flooding.\nVertical clearance under bridges decreases.\nVulnerable coastal areas may suffer damage from erosion.\nMoored vessels are at risk of hull damage."
+      }
+     },
+     {
+      "title": {
+       "sv": "Var?",
+       "en": "Where?",
+       "code": "WHERE"
+      },
+      "text": {
+       "sv": "Från Öresundsbron till Simrishamn",
+       "en": "From the Öresund Bridge to Simrishamn"
+      }
+     }
+    ],
+    "area": {
+     "type": "Feature",
+     "geometry": {
+      "type": "LineString",
+      "coordinates": [
+       [
+        12.89729949117011,
+        55.5612903529849
+       ],
+       [
+        12.89555,
+        55.55599
+       ],
+       [
+        12.89926,
+        55.53923
+       ],
+       [
+        12.92406,
+        55.50794
+       ],
+       [
+        12.94486,
+        55.48174
+       ],
+       [
+        12.96848,
+        55.46313
+       ]
+      ]
+     }
+    },
+    "created": "2026-10-16T13:52:37.810Z"
+   }
+  ]
+ },
+ {
+  "id": 3122,
+  "normalProbability": true,
+  "event": {
+   "sv": "Risk för vattenbrist",
+   "en": "Risk for water shortage",
+   "code": "WATER_SHORTAGE",
+   "mhoClassification": {
+    "sv": "Hydrologi",
+    "en": "Hydrology",
+    "code": "HYD"
+   }
+  },
+  "descriptions": [],
+  "warningAreas": [
+   {
+    "id": 9873,
+    "approximateStart": "2026-04-20T22:00:00.000Z",
+    "published": "2026-10-12T15:11:05.488Z",
+    "normalProbability": true,
+    "pushNotice": true,
+    "areaName": {
+     "sv": "Skåne län"
+    },
+    "warningLevel": {
+     "sv": "Meddelande",
+     "en": "Message",
+     "code": "MESSAGE"
+    },
+    "eventDescription": {
+     "sv": "Risk för vattenbrist - Grundvatten och vattendrag",
+     "en": "Risk for water shortage - Groundwater and watercourses",
+     "code": "WATERCOURSES_GROUNDWATER_MINOR_MAJOR"
+    },
+    "affectedAreas": [
+     {
+      "id": 12,
+      "sv": "Skåne län",
+      "en": "Skåne County"
+     }
+    ],
+    "descriptions": [
+     {
+      "title": {
+       "sv": "Händelsebeskrivning",
+       "en": "Description of incident",
+       "code": "INCIDENT"
+      },
+      "text": {
+       "sv": "Låga grundvattennivåer. Låga flöden i Rönne å, Helge å, Kävlingeån med biflöden, Almaån, Holjeån samt i vissa känsliga vattendrag i de östra och södra delarna av länet.",
+       "en": "Low groundwater levels. Low flows in rivers Rönne å, Kävlingeån with tributaries, Almaån, Holjeån and in sensitive watercourses in the eastern and southern parts of the county."
+      }
+     },
+     {
+      "title": {
+       "sv": "Vad ska jag tänka på?",
+       "en": "What should I think about?",
+       "code": "AFFECT"
+      },
+      "text": {
+       "sv": "Du som använder kommunalt vatten bör vara uppmärksam på att kommunen kan utfärda restriktioner och uppmana till vattenbesparande åtgärder.\nDu som har enskilt vatten från egen eller delad brunn bör vara sparsam med vattenförbrukningen eftersom låga grundvattennivåer kan minska uttagskapaciteten och försämra vattenkvaliteten.\nVerksamheter och hushåll med enskilt vatten från sjöar eller vattendrag bör vara vaksamma på att låga vattennivåer kan begränsa uttagsmängderna och försämra vattenkvaliteten.\nLåga vattennivåer kan ha negativ påverkan på växt- och djurliv inom jordbruket och i naturen.",
+       "en": "Users of municipal water should be aware that the municipality may impose restrictions and encourage water-saving measures.\nThose receiving water from private or shared wells should be considerate of their water consumption, as low groundwater levels may reduce abstraction capacity and deteriorate water quality.\nBusinesses and households with private water from lakes or rivers should be aware that low water levels may limit the amount of water withdrawn and degrade water quality.\nLow water levels may have a negative impact on plant and animal life in agriculture and in nature."
+      }
+     }
+    ],
+    "area": {
+     "crs": {
+      "type": "name",
+      "properties": {
+       "name": "EPSG:4326"
+      }
+     },
+     "type": "Feature",
+     "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+       [
+        [
+         14.19253,
+         55.73408
+        ],
+        [
+         14.20246,
+         55.71391
+        ],
+        [
+         14.2191,
+         55.69445
+        ],
+        [
+         14.2607,
+         55.68035
+        ],
+        [
+         14.27852,
+         55.66625
+        ],
+        [
+         14.28209,
+         55.62593
+        ],
+        [
+         14.19253,
+         55.73408
+        ]
+       ]
+      ]
+     },
+     "properties": {
+      "en": "Skåne County",
+      "id": 12,
+      "sv": "Skåne län",
+      "code": "SWE_COUNTIES"
+     }
+    },
+    "created": "2026-04-21T09:08:24.221Z"
+   }
+  ]
+ }
+]
