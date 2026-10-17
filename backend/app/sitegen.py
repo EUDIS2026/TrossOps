@@ -282,11 +282,11 @@ def navbase(site_id: str, center: LngLat, seaward: float, seed: int, piers: int 
             for j in range(2):
                 p = f.p(70 + j * 110, v + side * 28)
                 lay.spots["berth"].append(Spot(f"{site_id}:B{k + 1}{'LR'[side > 0]}{j + 1}", p[0], p[1], f.heading(0), "berth", f.p(260 + j * 40, v + side * 28)))
-    _poly(lay, f.rect(60, 430, 120, 70), "infra", "pontoon", "Boat basin")
+    _poly(lay, f.rect(115, 430, 130, 70), "infra", "pontoon", "Boat basin")  # u 50..180: off the quay, in the water
     lay.spots["pad"] = []
     for j in range(8):
-        p = f.p(30 + (j % 4) * 28, 405 + (j // 4) * 40)
-        lay.spots["pad"].append(Spot(f"{site_id}:P{j + 1}", p[0], p[1], f.heading(0), "pad", f.p(160, 430)))
+        p = f.p(70 + (j % 4) * 30, 405 + (j // 4) * 40)
+        lay.spots["pad"].append(Spot(f"{site_id}:P{j + 1}", p[0], p[1], f.heading(0), "pad", f.p(200, 430)))
     for k, (u, v, ln, w, h, cls, nm) in enumerate([(-200, -300, 90, 40, 14, "building", "Workshop"), (-200, -180, 70, 30, 12, "building", "Naval staff"),
                                                    (-380, -330, 60, 24, 12, "barracks", "Barracks 1"), (-380, -230, 60, 24, 12, "barracks", "Barracks 2"),
                                                    (-250, 250, 80, 50, 10, "warehouse", "Stores")]):
@@ -368,6 +368,46 @@ def generic(site_id: str, kind: str, center: LngLat, axis: float, size: float = 
     _line(lay, [_r(p) for p in lay.footprint], "defence", "fence", "Perimeter fence")
     _poly(lay, f.rect(0, 0, size * 0.5, size * 0.3), "infra", "building", "Main building", 14)
     return lay
+
+
+def _in_ring(p: LngLat, ring: list[LngLat]) -> bool:
+    inside, j = False, len(ring) - 1
+    for i in range(len(ring)):
+        (xi, yi), (xj, yj) = ring[i], ring[j]
+        if (yi > p[1]) != (yj > p[1]) and p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+def placement_samples(lay: SiteLayout, spacing_m: float = 50.0) -> tuple[list[LngLat], list[LngLat], list[LngLat]]:
+    """(dry, wet, sea): points that must be dry, road-free ground (the whole footprint: fence line and interior on a
+    `spacing_m` grid), points that must be water (a naval base's berths and boat pads, fine ~110 m mask) and points
+    that must be navigable sea (its channel out, routing mask) for this layout to make sense."""
+    if lay.kind == "navbase":
+        f = Frame(lay.center, lay.axis)
+        # land side up to 60 m short of the quay (the coastline cell quantisation is ~110 m)
+        dry = [f.p(u, v) for u in range(-650, -59, int(spacing_m)) for v in range(-520, 521, int(spacing_m))]
+        wet = [(s.lng, s.lat) for kind in ("berth", "pad") for s in lay.spots.get(kind, [])] + [f.p(240, 0), f.p(300, 0)]
+        return dry, wet, [f.p(600, 0), f.p(1500, 0)]
+    ring = lay.footprint
+    dry: list[LngLat] = []
+    for a, b in zip(ring, ring[1:]):
+        n = max(1, int(geo.haversine_m(a, b) / spacing_m))
+        dry += [(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n) for k in range(n)]
+    lo_x, hi_x = min(p[0] for p in ring), max(p[0] for p in ring)
+    lo_y, hi_y = min(p[1] for p in ring), max(p[1] for p in ring)
+    dy = spacing_m / 111_195.0
+    dx = dy / math.cos(math.radians((lo_y + hi_y) / 2))
+    y = lo_y + dy / 2
+    while y < hi_y:
+        x = lo_x + dx / 2
+        while x < hi_x:
+            if _in_ring((x, y), ring):
+                dry.append((x, y))
+            x += dx
+        y += dy
+    return dry, [], []
 
 
 def ad_battery_positions(center: LngLat, axis: float, n: int, radius_m: float, seed: int) -> list[tuple[LngLat, float]]:

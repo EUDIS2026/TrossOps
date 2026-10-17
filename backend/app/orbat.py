@@ -28,7 +28,7 @@ from . import geo, sitegen
 from .motion import MotionSpec, Path, densify, racetrack
 
 ROUTE_CACHE = FsPath(__file__).resolve().parents[1] / "data" / "world_routes.json.gz"
-ROUTE_CACHE_VERSION = 3
+ROUTE_CACHE_VERSION = 9  # 7: sites on dry road-free ground (berths in the sea); columns and loops on the network
 
 # Public reference points (city centres, coastal and sea waypoints), [lng, lat].
 P: dict[str, tuple[float, float]] = {
@@ -256,11 +256,80 @@ def road_net(p: tuple[float, float]):
 
 
 def road_route(cache: RouteCache, a: tuple[float, float], b: tuple[float, float]) -> list[tuple[float, float]]:
+    """A column's march on the road network, from the node nearest `a` to the node nearest `b` (no off-road legs:
+    the column forms up on the road). With no road connection the column stays where it is, never a straight
+    line across country or water."""
     def compute():
         net = road_net(a)
-        r = net.route(a, b) if net and on_gotland(a) == on_gotland(b) else None
-        return r.coords if r else densify([a, b], 2000)
+        r = net.route(a, b, access="none") if net and on_gotland(a) == on_gotland(b) else None
+        return r.coords if r else [a, a]
     return cache.get(RouteCache.key("road", a, b), compute)
+
+
+def land_mask():
+    gn = _geonet()
+    try:
+        return gn.land() if gn else None
+    except (OSError, ValueError):  # mask not built: placement falls back to the declared positions
+        return None
+
+
+_ROAD_CELLS: dict[tuple[str, ...], set[int]] = {}
+
+
+def road_cells_near(p: tuple[float, float]) -> set[int]:
+    """Road cells (land-mask grid) of the networks around p: national roads plus any city / island graph whose
+    bounds contain p. Rasterised lazily; only needed when a placement is not in the committed cache."""
+    mask, gn = land_mask(), _geonet()
+    if mask is None or gn is None:
+        return set()
+    names = tuple(n for n in gn.cities() if _within(p, gn.city(n).bounds()))
+    hit = _ROAD_CELLS.get(names)
+    if hit is None:
+        hit = set(mask.road_cells(gn.national()))
+        for n in names:
+            hit |= mask.road_cells(gn.city(n))
+        _ROAD_CELLS[names] = hit
+    return hit
+
+
+def _within(p: tuple[float, float], bounds: tuple[float, float, float, float], pad: float = 0.05) -> bool:
+    x0, y0, x1, y1 = bounds
+    return x0 - pad <= p[0] <= x1 + pad and y0 - pad <= p[1] <= y1 + pad
+
+
+def on_ground(cache: "RouteCache", p: tuple[float, float], avoid_roads: bool = True, max_m: float = 5_000.0) -> tuple[float, float]:
+    """Nearest point to p that is dry land (and not on a road, for things parked beside one). Cached."""
+    def compute():
+        mask = land_mask()
+        if mask is None:
+            return [p]
+        q = mask.nearest_dry(p, max_m, blocked=road_cells_near(p) if avoid_roads else None)
+        if q is None and avoid_roads:
+            q = mask.nearest_dry(p, max_m)
+        return [q or p]
+    return cache.get(RouteCache.key("ground", p, avoid_roads, max_m), compute)[0]
+
+
+def at_sea(cache: "RouteCache", p: tuple[float, float], max_m: float = 15_000.0) -> tuple[float, float]:
+    """Nearest point to p that is sea in both masks, with ~150 m of water around it (a harbour position). Cached."""
+    def compute():
+        mask = land_mask()
+        if mask is None:
+            return [p]
+        best = None
+        r = 0.0
+        while r <= max_m and best is None:
+            n = 1 if r == 0 else max(12, int(2 * math.pi * r / 60))
+            for k in range(n):
+                q = geo.destination(p, 360.0 * k / n, r) if r else p
+                q = (round(q[0], 6), round(q[1], 6))
+                if mask.wet_ok(q, True) and all(mask.wet_ok(geo.destination(q, b, 150), True) for b in range(0, 360, 60)):
+                    best = q
+                    break
+            r += 60.0
+        return [best or p]
+    return cache.get(RouteCache.key("sea-point", p, max_m), compute)[0]
 
 
 def street_loop(cache: RouteCache, city: str, seed: int, start: tuple[float, float], length_m: float) -> list[tuple[float, float]]:
@@ -330,6 +399,14 @@ class Orbat:
                     return s
         raise RuntimeError(f"no free {'/'.join(kinds)} spot at {site}")
 
+    def harbour(self, site: str) -> list[tuple[float, float]]:
+        """Water points leading from a site out to sea: a naval base's own channel (its piers and channel were
+        placed in the sea), else the nearest sea position off the site (a civil port on the shore)."""
+        lay = self.layouts.get(site)
+        if lay is not None and lay.kind == "navbase":
+            return [lay.routes["channel"][0], lay.routes["channel"][1]]
+        return [at_sea(self.cache, self.sites[site])]
+
     def region_of(self, p: tuple[float, float]) -> str | None:
         best = min(COUNTY_OF, key=lambda k: geo.haversine_m(P[k], p))
         return COUNTY_OF[best]
@@ -352,24 +429,54 @@ class Orbat:
         self._civil()
         self._unknowns()
 
+    def _layout(self, s: SiteDef, c: tuple[float, float], axis: float) -> sitegen.SiteLayout:
+        seed = int(hashlib.md5(s.id.encode()).hexdigest()[:8], 16)
+        if s.kind == "airbase":
+            return sitegen.airbase(s.id, c, axis, seed, shelters_per_hub=12 if s.id != "airbase-ost" else 6)
+        if s.kind == "navbase":
+            return sitegen.navbase(s.id, c, axis, seed, piers=4 if s.id == "navbase-syd" else 3)
+        if s.kind == "garrison":
+            return sitegen.garrison(s.id, c, axis, seed)
+        if s.kind == "depot":
+            return sitegen.depot(s.id, c, axis, seed)
+        if s.kind == "radar":
+            return sitegen.radar(s.id, c, axis)
+        return sitegen.generic(s.id, s.kind, c, axis, 160 if s.affiliation == "civil" else 220)
+
+    def _place_site(self, s: SiteDef) -> tuple[tuple[float, float], float]:
+        """Site centre and axis. The declared position (town + offset) is only a seed: the whole footprint must
+        stand on dry ground clear of the road network (a naval base also needs its piers in the sea), so the
+        nearest such position is searched, turning the axis when the declared one does not fit. Cached."""
+        c0 = pt(s.near, *s.offset_km)
+
+        def compute():
+            mask = land_mask()
+            if mask is None:
+                return [c0, (s.axis, 0.0)]
+            roads = road_cells_near(c0)
+            turns = (0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180) if s.kind == "navbase" else (0, 45, -45, 90)
+            for blocked in (roads, None):  # prefer road-free ground; accept roads only if nothing else fits
+                for turn in turns:
+                    axis = (s.axis + turn) % 360
+                    dry, wet, sea = sitegen.placement_samples(self._layout(s, c0, axis))
+                    for tried, (de, dn) in enumerate(mask.candidates(c0, dry, max_m=25_000.0, wet=wet or None, blocked=blocked, sea=sea or None)):
+                        c = mask.shift(c0, de, dn)
+                        c = (round(c[0], 6), round(c[1], 6))
+                        # the layout rebuilt at c (local metric frame) must pass exactly, not just the shifted samples
+                        dry2, wet2, sea2 = sitegen.placement_samples(self._layout(s, c, axis))
+                        if mask.dry_ok(dry2, blocked) and all(mask.is_water(q) for q in wet2) and all(mask.wet_ok(q, True) for q in sea2):
+                            return [c, (axis, 0.0)]
+                        if tried > 40:
+                            break
+            return [c0, (s.axis, 0.0)]
+        got = self.cache.get(RouteCache.key("site", s.id, s.kind, c0, s.axis), compute)
+        return got[0], got[1][0]
+
     def _sites(self) -> None:
         for s in SITES:
-            c = pt(s.near, *s.offset_km)
+            c, axis = self._place_site(s)
             self.sites[s.id] = c
-            seed = int(hashlib.md5(s.id.encode()).hexdigest()[:8], 16)
-            if s.kind == "airbase":
-                lay = sitegen.airbase(s.id, c, s.axis, seed, shelters_per_hub=12 if s.id != "airbase-ost" else 6)
-            elif s.kind == "navbase":
-                lay = sitegen.navbase(s.id, c, s.axis, seed, piers=4 if s.id == "navbase-syd" else 3)
-            elif s.kind == "garrison":
-                lay = sitegen.garrison(s.id, c, s.axis, seed)
-            elif s.kind == "depot":
-                lay = sitegen.depot(s.id, c, s.axis, seed)
-            elif s.kind == "radar":
-                lay = sitegen.radar(s.id, c, s.axis)
-            else:
-                lay = sitegen.generic(s.id, s.kind, c, s.axis, 160 if s.affiliation == "civil" else 220)
-            self.layouts[s.id] = lay
+            self.layouts[s.id] = self._layout(s, c, axis)
             kind = "facility" if s.kind in ("airbase", "navbase", "garrison", "depot", "hospital", "hq") else "infrastructure"
             self.add(Node(s.id, s.label, kind, "site" if kind == "facility" else "infra", s.layer, s.sidc or "SFGPI-------", s.affiliation, None, None,
                           s.label.split(" (")[0], None, None, s.id, COUNTY_OF.get(s.near), s.capabilities, MotionSpec("static", pos=(c[0], c[1], None)),
@@ -640,10 +747,11 @@ class Orbat:
         rng = random.Random(seed)
         nodes: list[tuple[float, float]] = []
         net = road_net(center)
+        mask = land_mask()
         if net is not None:
             cand = list(net.nodes_within(center, radius_m, {"secondary", "tertiary", "minor"} if on_gotland(center) else {"secondary", "tertiary"}))
             rng.shuffle(cand)
-            nodes = cand[:64]
+            nodes = [q for q in cand if mask is None or mask.is_dry(q)][:64]  # not bridge nodes
 
         def place(i: int, total: int) -> MotionSpec:
             if nodes:
@@ -651,18 +759,12 @@ class Orbat:
                 p = geo.destination(base, rng.uniform(0, 360), rng.uniform(25, 60))
             else:
                 p = geo.destination(center, rng.uniform(0, 360), rng.uniform(0.2, 1.0) * radius_m)
+            p = on_ground(self.cache, p, max_m=800.0)
             return MotionSpec("static", pos=(p[0], p[1], None), heading=(facing + rng.uniform(-25, 25)) % 360)
         return place
 
     def on_road(self, rid: str, a: tuple[float, float], b: tuple[float, float], speed: float, start_s: float, hold_s: float, spacing_m: float = 70.0):
-        # A routed path starts and ends with straight access legs from the site to the nearest road node; a column
-        # on the march stays on the road itself, so those legs are dropped (the column forms up on the road).
-        coords = road_route(self.cache, a, b)
-        if len(coords) > 4:
-            if geo.haversine_m(coords[0], coords[1]) > 30:
-                coords = coords[1:]
-            if geo.haversine_m(coords[-1], coords[-2]) > 30:
-                coords = coords[:-1]
+        coords = road_route(self.cache, a, b)  # on the network end to end (the column forms up on the road)
         path = self.shared_route(rid, coords, speed)
 
         def place(i: int, total: int) -> MotionSpec:
@@ -744,7 +846,9 @@ class Orbat:
 
     def _ad_unit(self, cid: str, label: str, parent: str, region: str | None, center: tuple[float, float], launchers: int, radars: int, plat: str, range_km: float) -> None:
         self.formation(cid, label, label.split(" ")[-1] if "Battery" not in label else label.replace("AD Battery ", "Bty "), "SFGPUCD----E", "company", parent, "land.ad", "land", region=region, caps=["air_defence"])
+        center = on_ground(self.cache, center)
         for i, (p, b) in enumerate(sitegen.ad_battery_positions(center, 0, launchers, 1800 if range_km > 50 else 900, stable_seed(cid))):
+            p = on_ground(self.cache, p, max_m=1500.0)
             n = self.vehicle(f"{cid[3:]}-l{i + 1}", f"{label} L{i + 1}", "ad_launcher", cid, region, MotionSpec("static", pos=(p[0], p[1], None), heading=b))
             n.platform = plat
             n.range_km = range_km
@@ -787,9 +891,10 @@ class Orbat:
                                                                   "mcm": ["mine_warfare"], "submarine": ["asw", "isr"], "support_ship": ["supply", "fuel"]}[model],
                                 crew={"corvette": 43, "patrol_ship": 30, "mcm": 25, "submarine": 27, "support_ship": 50}[model], range_km=250)
                     if k < len(patrols):
-                        wps = [self.sites[base]] + [P[w] for w in patrols[k]] + [self.sites[base]]
+                        out = self.harbour(base)  # berth area -> open water through the base's own channel
+                        wps = [out[-1]] + [P[w] for w in patrols[k]] + [out[-1]]
                         coords = chain(*[sea_route(self.cache, wps[i], wps[i + 1]) for i in range(len(wps) - 1)])
-                        coords = chain([(berth.lng, berth.lat)], coords, [(berth.lng, berth.lat)])
+                        coords = chain([(berth.lng, berth.lat)], out, coords, list(reversed(out)), [(berth.lng, berth.lat)])
                         alt = -40.0 if model == "submarine" else None
                         pts = [(c[0], c[1], alt) for c in coords]
                         spd = {"corvette": 9.0, "patrol_ship": 8.0, "mcm": 5.0, "submarine": 4.0}[model]
@@ -812,8 +917,8 @@ class Orbat:
                 node = Node(vid, f"Assault craft {ci + 1}-{k + 1:02d}", "vessel", "sea", "sea.amphib", "SFSPCALC----", "own", cid, None, f"{k + 1}",
                             "Fast assault craft", "cb90", base, self.region_of(self.sites[base]), ["amphibious", "patrol"], crew=3, range_km=80)
                 if k < 2:
-                    ch = lay.routes["channel"]
-                    out = chain([(pad.lng, pad.lat)], ch, sea_route(self.cache, ch[-1], geo.destination(ch[-1], lay.axis + 40, 12000)))
+                    ch = self.harbour(base)  # the base's checked channel, then the sea grid to a patrol point in real sea
+                    out = chain([(pad.lng, pad.lat)], ch, sea_route(self.cache, ch[-1], at_sea(self.cache, geo.destination(ch[-1], lay.axis + 40, 12000))))
                     loop = out + list(reversed(out))[1:]
                     node.motion = MotionSpec("path", path=Path([(c[0], c[1], None) for c in loop], [14.0]), start_s=300 + k * 30, hold_s=1500, mode="loop")
                 else:
@@ -838,7 +943,7 @@ class Orbat:
                     c = pt(seat, (ci - 1) * 4, 2)
                     task = "Area security"
                 for t in range(2):
-                    p = geo.destination(c, t * 140, 120)
+                    p = on_ground(self.cache, geo.destination(c, t * 140, 120))
                     self.add(Node(f"hg-{code}-{ci + 1}{'ab'[t]}", f"HG {county} {ci + 1}{'AB'[t]}", "personnel", "land", "land.homeguard", "SFGPUCI----D", "own", cid,
                                   None, f"{ci + 1}{'AB'[t]}", "Home Guard platoon", "personnel", None, code, ["guard", "area_security"],
                                   MotionSpec("static", pos=(p[0], p[1], None), heading=t * 140), crew=30, range_km=20, tags=[task]))
@@ -889,20 +994,23 @@ class Orbat:
         cg = [("cg-1", "port-lulea", ["sea_bothnia_bay", "sea_bothnia_n"]), ("cg-2", "navbase-vast", ["sea_kattegat_n", "sea_kattegat"]), ("cg-3", "port-trelleborg", ["sea_oresund", "sea_bornholm_n"]),
               ("cg-4", "navbase-ost", ["sea_landsort", "sea_gotland_ne"]), ("cg-5", "navbase-syd", ["sea_oland_s", "sea_oland_e"]), ("cg-6", "port-goteborg", []), ("cg-7", "port-lulea", [])]
         for k, (vid, base, wps_names) in enumerate(cg):
-            c = self.sites[base]
+            out = self.harbour(base)
+            c = out[-1]
             node = Node(vid, f"Coast guard vessel {k + 1}", "vessel", "sea", "civil.coastguard", "SNSPXL------", "civil", "fm-cg", None, f"KBV{k + 1}",
                         "Coast guard patrol vessel", "coast_guard", base, self.region_of(c), ["patrol", "sar", "law_enforcement"], crew=12, range_km=200)
             if wps_names:
                 wps = [c] + [P[w] for w in wps_names] + [c]
-                coords = chain(*[sea_route(self.cache, wps[i], wps[i + 1]) for i in range(len(wps) - 1)])
+                coords = chain(out, *[sea_route(self.cache, wps[i], wps[i + 1]) for i in range(len(wps) - 1)], list(reversed(out)))
                 node.motion = MotionSpec("path", path=Path([(x[0], x[1], None) for x in coords], [7.5]), start_s=k * 300, hold_s=2400, mode="loop")
             else:
-                node.motion = MotionSpec("static", pos=(c[0], c[1], None), heading=0)
+                node.motion = MotionSpec("static", pos=(out[0][0], out[0][1], None), heading=0)
             self.add(node)
 
     # -- the uncertain part of the picture: unknown and suspect tracks ------------------------------------------------
     def _unknowns(self) -> None:
         def track(id_, label, kind, domain, layer, sidc, pts, speed, start, alt=None, mode="once", hold=0.0, tags=None, model="unknown_air"):
+            if domain == "sea" and not isinstance(speed, list):  # declared waypoints; the track itself follows the water
+                pts = chain(*[sea_route(self.cache, pts[i], pts[i + 1]) for i in range(len(pts) - 1)])
             path = Path([(p[0], p[1], alt) for p in pts], speed if isinstance(speed, list) else [speed])
             return self.add(Node(id_, label, kind, domain, layer, sidc, "unknown", None, None, label.split(" ")[-1], None, model, None, None, [],
                                  MotionSpec("path", path=path, start_s=start, mode=mode, hold_s=hold, airborne=domain == "air"), tags=tags or []))
@@ -917,7 +1025,7 @@ class Orbat:
         track("unk-sea-01", "Unknown sea track S1", "unknown", "sea", "track.unknown", "SUSP--------",
               [(20.30, 56.60), (19.40, 57.10), (19.00, 57.55), (19.20, 58.10), (19.90, 58.30)], 9, 0, model="unknown_sea")
         track("unk-sea-02", "Unknown sea track S2", "unknown", "sea", "track.unknown", "SUSP--------",
-              [(12.40, 55.95), (12.75, 56.30), (12.30, 56.60), (11.90, 57.00), (11.60, 57.50)], 7, 600, model="unknown_sea")
+              [(12.62, 55.93), (12.75, 56.30), (12.30, 56.60), (11.90, 57.00), (11.60, 57.50)], 7, 600, model="unknown_sea")
         # A tanker declaring itself on AIS, loitering slowly over the Gotland–Lithuania cable with AIS dark periods.
         cable = CABLES[0]["coords"]
         loiter = [tuple(cable[1]), (19.62, 56.97), (19.55, 57.02), (19.66, 57.04), (19.58, 56.99), (19.64, 57.03), (19.57, 57.0), tuple(cable[1])]
