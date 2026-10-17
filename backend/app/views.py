@@ -100,7 +100,7 @@ def mode(id_: str, label: str, desc: str, layers: list[str], cam: dict, kpis: li
 
 
 ROLES: list[RoleDef] = [
-    RoleDef(id="national_commander", label="National commander", scope="national", description="Sweden as one asset: forces, threats, sustainment and civil functions.", defaultModeId="overview", modes=[
+    RoleDef(id="national_commander", label="National commander", scope="national", description="Sweden as one asset: forces, threats, logistics and civil functions.", defaultModeId="overview", modes=[
         mode("overview", "Overview", "All own forces by formation, sites and where to look", AIR + LAND + SEA + SITES + ["analysis.fusion"], CAM_NATIONAL, ["readiness", "airborne", "alerts"]),
         mode("threat", "Threat", "Unknown and suspect tracks, where they may go and how soon they could reach us", ["picture.predictions", "air.fighter", "land.ad", "sea.combat", "infra.sensors", "infra.cables", "live.air_mil", "picture.areas", "analysis.threat"], CAM_BALTIC, ["unknown", "critical", "deception"]),
         mode("readiness", "Readiness", "Readiness by formation and how fast the nearest ready unit can respond", AIR + LAND + SEA + SITES + ["land.homeguard", "analysis.response"], CAM_NATIONAL, ["readiness", "unavailable", "fuel"]),
@@ -115,7 +115,7 @@ ROLES: list[RoleDef] = [
         mode("picture", "Sea picture", "Own ships, real ship traffic (AIS) and unknown tracks", SEA + ["civil.coastguard", "live.sea", "picture.predictions", "infra.sensors", "sites.sea"], CAM_BALTIC, ["unknown", "seaReady", "deception"]),
         mode("infrastructure", "Undersea infrastructure", "Cable corridors, loitering ships and AIS anomalies", ["infra.cables", "live.sea", "sea.combat", "civil.coastguard", "picture.predictions", "analysis.fusion"], CAM_GOTLAND, ["deception", "unknown", "critical"]),
     ]),
-    RoleDef(id="land_ops", label="Army operations", scope="functional", description="Brigades down to each vehicle on its road; fires, air defence and sustainment.", defaultModeId="manoeuvre", modes=[
+    RoleDef(id="land_ops", label="Army operations", scope="functional", description="Brigades down to each vehicle on its road; artillery, air defence and logistics.", defaultModeId="manoeuvre", modes=[
         mode("manoeuvre", "Manoeuvre", "Brigades, battalions and companies on the road network", LAND + ["land.homeguard", "sites.land", "picture.plans", "analysis.response", "civil.traffic"], CAM_SOUTH, ["landReady", "moving", "alerts"]),
         mode("logistics", "Logistics", "Supply convoys, fuel and depots", ["land.logistics", "sites.logistics", "sites.land", "sea.support", "picture.plans"], CAM_NATIONAL, ["fuel", "faults", "interventions"]),
     ]),

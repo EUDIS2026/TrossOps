@@ -289,7 +289,7 @@ function SourcesPanel() {
   const probe = async () => { setProbing(true); try { const { api } = await import('../core/api'); store.set({ sources: (await api.sources(true)).sources }) } finally { setProbing(false) } }
   return <>
     <div className="actions"><button className="btn" disabled={probing} onClick={() => void probe()}>{probing ? 'Checking…' : 'Check all sources now'}</button></div>
-    <small className="quiet">Status: <b>working</b> data arriving · <b>partial</b> some data or delayed · <b>adapter-only</b> built, needs an access key · <b>blocked</b> not reachable.</small>
+    <small className="quiet">Status: <b>working</b> data arriving · <b>partial</b> some data or delayed · <b>adapter-only</b> built, needs an access key · <b>blocked</b> not reachable or turned off.</small>
     <div className="list">{sources.map(s => <div key={s.id} className="source">
       <div><span className={`status ${s.status}`}>{s.status}</span><strong>{s.label}</strong></div>
       <small>{s.count != null ? `${s.count} items · ` : ''}{s.lastOkAt ? `updated ${ago(s.lastOkAt)}` : 'not fetched yet'}{s.stale ? ' · out of date' : ''}</small>

@@ -46,7 +46,7 @@ const WORD: Record<string, string> = {
   medevac: 'medical evacuation', mech_infantry: 'mechanised infantry', comms_hub: 'communications hub', small_uas: 'small drone', low_level: 'low level',
 }
 /** Capability and tag words in plain language, abbreviations spelled out. */
-export const plainWord = (w: string) => WORD[w] ?? w.replace(/_/g, ' ')
+export const plainWord = (w: string) => WORD[w] ?? w.replace(/_/g, ' ').replace(/\bQRA\b/, 'quick-reaction alert')
 
 export const channelLabel: Record<string, string> = { field_report: 'Field report', unit_sitrep: 'Unit status report (SITREP)', logistics_report: 'Logistics report', maintenance_log: 'Maintenance log', sensor_detection: 'Sensor detection', intel_report: 'Intelligence report', civil_emergency: 'Civil emergency', weather_advisory: 'Weather advisory', infrastructure_status: 'Infrastructure status', public_news: 'Public news', cyber_alert: 'Cyber alert', command_directive: 'Command directive', allied_liaison: 'Allied liaison', head_of_state_directive: 'Head-of-state directive', police_event: 'Police event', crisis_info: 'Crisis information' }
 
