@@ -60,7 +60,7 @@ MAX_TURN_DPS = {"air": 3.0, "sea": 0.6}  # sustained turn rates (deg/s) assumed 
 
 
 def alternatives(entity: SceneEntity, cv: PredictedPath, targets: list[tuple[SceneEntity, tuple[float, float]]], t0: float,
-                 horizon_s: float = 1800, step_s: float = 60) -> list[PredictedPath]:
+                 horizon_s: float = 1800, step_s: float = 60, history: dict | None = None) -> list[PredictedPath]:
     """Competing hypotheses next to constant velocity: goal-seeking toward the most exposed own site ahead,
     and continuation of a turn. Probabilities are normalised with the constant-velocity path (updated in place)."""
     if not entity.position or not entity.kinematics or not entity.kinematics.speedMps:

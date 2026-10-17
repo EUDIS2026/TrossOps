@@ -24,6 +24,8 @@ CHANNEL_META: dict[str, dict] = {
     "command_directive": {"label": "Command directive", "level": "regional", "weight": 1.0},
     "allied_liaison": {"label": "Allied liaison", "level": "allied", "weight": 0.7},
     "head_of_state_directive": {"label": "Head-of-state directive", "level": "head_of_state", "weight": 1.0},
+    "police_event": {"label": "Police event (public)", "level": "civil_authority", "weight": 0.6},
+    "crisis_info": {"label": "Crisis information (public)", "level": "civil_authority", "weight": 0.7},
 }
 
 SEVERITY_RANK: dict[str, int] = {"info": 0, "advisory": 1, "warning": 2, "critical": 3}

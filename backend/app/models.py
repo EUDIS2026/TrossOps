@@ -32,6 +32,8 @@ Channel = Literal[
     "command_directive",     # regional / joint command
     "allied_liaison",        # partner nation liaison officer
     "head_of_state_directive",
+    "police_event",          # Polisen public events (real feed, municipality-level positions)
+    "crisis_info",           # Krisinformation.se public crisis messages
 ]
 AuthorLevel = Literal[
     "soldier", "platoon", "company", "battalion", "brigade", "regional", "joint", "national",
