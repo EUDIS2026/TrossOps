@@ -125,7 +125,8 @@ await step('E2E-08', 'Trajectory planning: pick a destination, compare options, 
   await page.mouse.click(box.x + pt.x, box.y + pt.y); await wait(3500)
   const opts = await page.locator('.inspector .route-opt').count()
   await shot('08-route-options')
-  await page.locator('.inspector button', { hasText: 'Execute' }).click(); await wait(3000)
+  await page.locator('.inspector button', { hasText: 'Execute' }).click()
+  await page.waitForFunction(() => window.__session.world.catalog.plans.some(p => p.entityId === 'fl-s-cor3'), null, { timeout: 15000 }).catch(() => undefined)
   const plans = await run(() => window.__session.world.catalog.plans.map(p => p.entityId))
   expect(opts >= 1 && plans.includes('fl-s-cor3'), { opts, plans })
   return { opts, plans }

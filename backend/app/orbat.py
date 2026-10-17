@@ -655,7 +655,14 @@ class Orbat:
         return place
 
     def on_road(self, rid: str, a: tuple[float, float], b: tuple[float, float], speed: float, start_s: float, hold_s: float, spacing_m: float = 70.0):
+        # A routed path starts and ends with straight access legs from the site to the nearest road node; a column
+        # on the march stays on the road itself, so those legs are dropped (the column forms up on the road).
         coords = road_route(self.cache, a, b)
+        if len(coords) > 4:
+            if geo.haversine_m(coords[0], coords[1]) > 30:
+                coords = coords[1:]
+            if geo.haversine_m(coords[-1], coords[-2]) > 30:
+                coords = coords[:-1]
         path = self.shared_route(rid, coords, speed)
 
         def place(i: int, total: int) -> MotionSpec:
