@@ -1,0 +1,4 @@
+# Build-only dependencies for scripts/data/build_geonet.py.
+# The MVT decoder, graph builder and rasteriser are pure standard library; the only
+# third-party package is the HTTP client, pinned to the same version as the backend runtime.
+httpx==0.28.1
