@@ -8,6 +8,7 @@ from .adsb import AdsbFeed
 from .ais import AisFeed
 from .aisstream import AisStreamFeed
 from .base import Feed, feeds_disabled
+from .firms import FirmsFeed
 from .krisinfo import KrisinfoFeed
 from .openmeteo import OpenMeteoFeed
 from .polisen import PolisenFeed
@@ -27,9 +28,10 @@ POLISEN = PolisenFeed()
 KRISINFO = KrisinfoFeed()
 SWPC = SwpcFeed()
 TRAFIKVERKET = TrafikverketFeed()
+FIRMS = FirmsFeed()
 
 FEEDS: dict[str, Feed] = {f.id: f for f in (ADSB, AIS, AISSTREAM, SMHI_OBS, SMHI_WARNINGS, OPEN_METEO, RAINVIEWER,
-                                             POLISEN, KRISINFO, SWPC, TRAFIKVERKET)}
+                                             POLISEN, KRISINFO, SWPC, TRAFIKVERKET, FIRMS)}
 
 
 def get(feed_id: str) -> dict:
@@ -41,4 +43,4 @@ def statuses() -> list[dict]:
 
 
 __all__ = ["FEEDS", "Feed", "feeds_disabled", "get", "statuses", "ADSB", "AIS", "AISSTREAM", "SMHI_OBS", "SMHI_WARNINGS",
-           "OPEN_METEO", "RAINVIEWER", "POLISEN", "KRISINFO", "SWPC", "TRAFIKVERKET"]
+           "OPEN_METEO", "RAINVIEWER", "POLISEN", "KRISINFO", "SWPC", "TRAFIKVERKET", "FIRMS"]

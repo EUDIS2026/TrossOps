@@ -110,3 +110,8 @@ def crisis() -> dict:
 @router.get("/civil/traffic")
 def traffic() -> dict:
     return feeds.TRAFIKVERKET.get()
+
+
+@router.get("/env/fires")
+def fires() -> dict:
+    return feeds.FIRMS.get()
