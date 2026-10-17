@@ -10,6 +10,7 @@ water. They are consumed by `backend/app/geonet.py` (standard library only) and 
 | `city_<name>.json.gz` × 20 | City street graphs: motorway … minor (incl. residential), z14 | 1.4 MB total (Stockholm 0.46 MB) |
 | `city_gotland.json.gz` | Region graph for the whole of Gotland incl. Fårö (minor and up, plus the Fårösund ferry), z13 | 0.15 MB |
 | `sea.bin` | Sea mask (~280 m) + navigable routing grid (~560 m) | 0.2 MB |
+| `land.bin` | Land/water mask incl. lakes and rivers (~110 m), for placement | 1.2 MB |
 
 Total ≈ 4.5 MB. Region graphs load through `geonet.city(name)` and are listed by `geonet.cities()` like the cities.
 
@@ -168,17 +169,32 @@ Dropped city length is mostly streets reachable only via excluded `service` road
    water and it is in the main 8-connected sea component. Values: 0 = not navigable,
    1 = open water, 2 = two cells from land, 3 = adjacent to land (cost ×1, ×1.15 and ×1.6).
 
+### Land mask (`land.bin`, step `land`)
+
+`b"TROSLND1"`, then a uint32 LE header length, the UTF-8 JSON header, and two zlib bit arrays of 7000 × 14200 cells
+(0.002° lng × 0.001° lat, ~110 m north-south) over lng 10.4–24.4, lat 55.0–69.2, rows from the north, LSB-first:
+
+1. **Water**: 1 where the cell centre lies inside any z11 OSM `water` polygon of class `ocean`, `lake`, `river`,
+   `pond` or `dock` (intermittent water excluded).
+2. **Known**: 1 where a fetched Sweden tile (8 km buffer) covers the cell. Elsewhere the runtime falls back to the
+   sea mask.
+
+`geonet.land()` uses it to keep every site footprint, parked unit and off-road leg on dry ground
+(`is_dry`, `nearest_dry`, `candidates`), and rasterises the road graphs onto the same grid (`road_cells`, ~4 s,
+only when a placement is not already in `world_routes.json.gz`) so buildings are not placed on roads.
+
 ## Runtime behaviour (`backend/app/geonet.py`)
 
 * **Roads:** A* on travel time with military-convoy class speeds (motorway 25, trunk 22,
   primary 19, secondary 16, tertiary 13, minor 9, service 6 m/s), optionally capped by
   `max_speed_mps`. Each edge touching an `avoid` polygon costs ×1000 + 1 h, so it is used only when
   there is no way around. Start and end join the nearest node with straight access legs at 5 m/s,
-  reported as `classes_m["access"]`. Output polylines are densified to ≤ 1 km spacing.
+  reported as `classes_m["access"]`, only where the leg crosses dry ground (`access="dry"`, the default);
+  `access="none"` starts and ends on the network (marching columns). Output polylines are densified to ≤ 1 km spacing.
 * **`random_loop`:** a seeded random walk that prefers unvisited edges, avoids U-turns and favours
   going straight on. It stops once the walked distance plus 1.3 × the straight distance home reaches
-  `length_m`, then takes the fastest path back. The result is closed and deterministic for the
-  same seed, start and length.
+  `length_m`, then takes the fastest path back. The loop starts and ends at the node nearest the start
+  (no access legs), and is closed and deterministic for the same seed, start and length.
 * **`nodes_within`:** junctions and shape vertices within a radius, nearest first, optionally
   filtered by class. The first call builds a vertex index (~0.7 s for the national graph).
 * **Sea:** 8-connected A* (weight 1.25, no corner cutting) on the routing grid, with land-proximity

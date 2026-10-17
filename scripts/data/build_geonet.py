@@ -4,12 +4,14 @@ Inputs (all public, see scripts/data/README.md):
   * OpenFreeMap vector tiles (OpenMapTiles schema, (c) OpenStreetMap contributors, ODbL)
       - layer `transportation` -> national road graph (z11) and city street graphs (z14)
       - layer `water` (class=ocean, plus sea-connected river reaches) -> sea mask (z10)
+      - layer `water` (every class: ocean, lake, river, pond, dock) -> land/water mask over Sweden (z11)
   * frontend/public/data/sweden_counties.geojson (SCB counties, CC0) -> which tiles to fetch
 
 Outputs:
   backend/data/geo/national.json.gz      road graph (motorway..tertiary)
   backend/data/geo/city_<name>.json.gz   street graphs (motorway..minor)
   backend/data/geo/sea.bin               water mask + navigable routing grid
+  backend/data/geo/land.bin              land/water mask incl. lakes and rivers (~110 m), for placement
 
 The script has no third-party dependencies beyond httpx (already a backend runtime
 dependency). Downloaded tiles are cached outside the repo and treated as untrusted
@@ -57,6 +59,13 @@ CITIES = {
 SEA_BBOX = (9.5, 53.8, 30.5, 66.2)  # lng0, lat0, lng1, lat1
 SEA_FINE = (0.005, 0.0025)  # dlng, dlat degrees (~280 m)
 SEA_ROUTE_FACTOR = 2  # routing cell = 2x2 fine cells (~560 m)
+
+# Land mask: every water polygon (sea, lakes, rivers, ponds, docks) over Sweden, so placement can keep sites and
+# ground vehicles dry. Cells outside the fetched Sweden tiles are unknown and left as land (the backend also
+# consults the sea mask, which covers the open sea).
+LAND_BBOX = (10.4, 55.0, 24.4, 69.2)  # lng0, lat0, lng1, lat1
+LAND_FINE = (0.002, 0.001)  # dlng, dlat degrees (~110 m north-south, 50-110 m east-west)
+LAND_WATER_CLASSES = ("ocean", "lake", "river", "pond", "dock")
 
 
 def log(*a):
@@ -1123,6 +1132,119 @@ def tile_ocean_spans(args):
     return spans
 
 
+def tile_water_spans(args):
+    """Worker: rasterise the water polygons of one tile into row spans [(row, col0, col1)] of an arbitrary grid.
+    A cell is water when its centre lies inside a polygon (even-odd rule over all rings of the feature)."""
+    path, z, tx, ty, bbox, dlng, dlat, W, H, classes = args
+    data = Path(path).read_bytes()
+    if not data:
+        return []
+    try:
+        extent, feats = decode_layer(data, "water", lambda p: p.get("class") in classes and not p.get("intermittent"))
+    except ValueError as e:
+        print(f"bad tile {z}/{tx}/{ty}: {e}", file=sys.stderr)
+        return []
+    if not feats:
+        return []
+    lng0, lat0, lng1, lat1 = bbox
+    tw, ts, te, tn = tile_bbox(z, tx, ty)
+    r0 = max(0, math.ceil((lat1 - tn) / dlat - 0.5))
+    r1 = min(H - 1, math.floor((lat1 - ts) / dlat - 0.5))
+    c0 = max(0, math.ceil((tw - lng0) / dlng - 0.5))
+    c1 = min(W - 1, math.floor((te - lng0) / dlng - 0.5))
+    if r0 > r1 or c0 > c1:
+        return []
+    import bisect
+    ys_sorted = sorted(((lat2y(lat1 - (r + 0.5) * dlat, z) - ty) * extent, r) for r in range(r0, r1 + 1))
+    ys_only = [y for y, _ in ys_sorted]
+    spans = []
+    for gtype, _props, parts in feats:
+        if gtype != 3:
+            continue
+        cross = collections.defaultdict(list)
+        for ring in parts:
+            m = len(ring)
+            for i in range(m):
+                x1, y1 = ring[i]
+                x2, y2 = ring[(i + 1) % m]
+                if y1 == y2:
+                    continue
+                ya, yb = (y1, y2) if y1 < y2 else (y2, y1)
+                k = bisect.bisect_left(ys_only, ya)
+                while k < len(ys_only) and ys_only[k] < yb:
+                    yr, r = ys_sorted[k]
+                    cross[r].append(x1 + (yr - y1) * (x2 - x1) / (y2 - y1))
+                    k += 1
+        for r, xs in cross.items():
+            xs.sort()
+            for i in range(0, len(xs) - 1, 2):
+                la = x2lng(tx + xs[i] / extent, z)
+                lb = x2lng(tx + xs[i + 1] / extent, z)
+                ca = max(c0, math.ceil((la - lng0) / dlng - 0.5))
+                cb = min(c1, math.ceil((lb - lng0) / dlng - 0.5) - 1)
+                if ca <= cb:
+                    spans.append((r, ca, cb))
+    return spans
+
+
+def pack_bits(cells: bytearray) -> bytes:
+    """0/1 bytes -> LSB-first bit array, using big-int arithmetic (fast for ~100 M cells)."""
+    pad = (-len(cells)) % 8
+    if pad:
+        cells = cells + bytearray(pad)
+    acc = 0
+    for k in range(8):
+        acc |= int.from_bytes(bytes(cells[k::8]), "little") << k
+    return acc.to_bytes(len(cells) // 8, "little")
+
+
+def build_land(fetcher, args, rings):
+    z = args.land_zoom
+    tiles = sweden_tiles(z, rings, buffer_km=8.0)
+    fetcher.fetch_all(tiles)
+    lng0, lat0, lng1, lat1 = LAND_BBOX
+    dlng, dlat = LAND_FINE
+    W, H = round((lng1 - lng0) / dlng), round((lat1 - lat0) / dlat)
+    log(f"land: rasterising water of {len(tiles)} z{z} tiles into {W}x{H} grid")
+    cells = bytearray(W * H)
+    known = bytearray(W * H)  # 1 where a fetched tile covers the cell (else unknown)
+    jobs = [(str(fetcher.path(*t)), *t, LAND_BBOX, dlng, dlat, W, H, LAND_WATER_CLASSES) for t in tiles]
+    for t in tiles:
+        tw, ts, te, tn = tile_bbox(*t)
+        r0 = max(0, math.ceil((lat1 - tn) / dlat - 0.5))
+        r1 = min(H - 1, math.floor((lat1 - ts) / dlat - 0.5))
+        c0 = max(0, math.ceil((tw - lng0) / dlng - 0.5))
+        c1 = min(W - 1, math.floor((te - lng0) / dlng - 0.5))
+        for r in range(r0, r1 + 1):
+            known[r * W + c0:r * W + c1 + 1] = b"\x01" * (c1 - c0 + 1)
+    with cf.ProcessPoolExecutor(args.procs) as ex:
+        for spans in ex.map(tile_water_spans, jobs, chunksize=8):
+            for r, a, b in spans:
+                o = r * W
+                cells[o + a:o + b + 1] = b"\x01" * (b - a + 1)
+    share = sum(cells) / max(1, sum(known))
+    log(f"  water share of covered cells {share:.3f}")
+    a = zlib.compress(pack_bits(cells), 9)
+    b = zlib.compress(pack_bits(known), 9)
+    header = {
+        "version": 1, "kind": "landmask", "bbox": list(LAND_BBOX), "w": W, "h": H, "dlng": dlng, "dlat": dlat,
+        "water": {"zlen": len(a), "classes": list(LAND_WATER_CLASSES)}, "known": {"zlen": len(b)},
+        "source": f"OpenFreeMap {fetcher.version} water layer z{z} (classes {', '.join(LAND_WATER_CLASSES)}; intermittent excluded)",
+        "licence": LICENCE, "row0": "north", "bits": "LSB-first, row-major from the north-west corner; cell water if its centre is in a polygon",
+    }
+    hj = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    path = OUT_DIR / "land.bin"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(b"TROSLND1")
+        fh.write(struct.pack("<I", len(hj)))
+        fh.write(hj)
+        fh.write(a)
+        fh.write(b)
+    log(f"  wrote {path.relative_to(REPO)}: {path.stat().st_size / 1e6:.2f} MB")
+    return {"grid": [W, H], "tiles": len(tiles), "water_share": round(share, 4)}
+
+
 def build_sea(fetcher, args):
     z = args.sea_zoom
     tiles = tiles_in_bbox(z, *SEA_BBOX)
@@ -1293,6 +1415,7 @@ def main():
     ap.add_argument("--national-simplify-m", type=float, default=2.0)
     ap.add_argument("--city-simplify-m", type=float, default=0.7)
     ap.add_argument("--sea-zoom", type=int, default=10)
+    ap.add_argument("--land-zoom", type=int, default=11)
     ap.add_argument("--river-cells", type=int, default=60, help="fine cells (~280 m) of sea-connected river kept as water")
     ap.add_argument("--workers", type=int, default=6, help="concurrent downloads (max 6)")
     ap.add_argument("--procs", type=int, default=max(1, (os.cpu_count() or 2) - 1), help="decode processes")
@@ -1313,6 +1436,8 @@ def main():
         report["regions"] = build_regions(fetcher, args)
     if "sea" in steps:
         report["sea"] = build_sea(fetcher, args)
+    if "land" in steps:
+        report["land"] = build_land(fetcher, args, rings)
     log(f"downloaded {fetcher.fetched} tiles this run")
     print(json.dumps(report, indent=1))
 
