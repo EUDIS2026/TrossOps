@@ -245,6 +245,15 @@ def test_opensky_cloud_block_is_detected_fast_and_explained(monkeypatch):
     assert "opensky gap fill: paused 6" in feeds.ADSB.get()["lastError"] and "cloud-provider" in feeds.ADSB.get()["lastError"]
 
 
+def test_real_network_client_retries_one_failed_connection():
+    feeds.SWPC.transport = None
+    client = feeds.SWPC.client()
+    assert isinstance(client._transport, httpx.HTTPTransport) and client._transport._pool._retries == 1
+    assert client.timeout.read == 8.0
+    feeds.SWPC.transport = mock([("swpc.noaa.gov", "swpc_kp.json")])
+    assert isinstance(feeds.SWPC.client()._transport, httpx.MockTransport)  # tests keep their injected transport
+
+
 def test_describe_reports_timeout_phase_limit_and_host():
     from app.feeds.base import describe
     req = httpx.Request("GET", "https://example.org/x", extensions={"timeout": {"connect": 2.5, "read": 8, "write": 8, "pool": 8}})

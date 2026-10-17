@@ -37,7 +37,7 @@ OPENSKY_MIN_GAP_S = 60.0
 OPENSKY_FAIL_BACKOFF_S = 600.0  # after a timeout / refused connection / rejected credentials
 OPENSKY_RETRY_S = 120.0  # after any other failure (HTTP 429 credit limit, 5xx, bad payload)
 # OpenSky answers in < 1 s when reachable; from many cloud ranges (AWS, hence Vercel) it silently drops connections.
-# A short connect timeout detects that in seconds instead of holding the request for the full client timeout.
+# A short connect timeout (tried twice: the client retries one failed connection) detects that in ~6 s instead of 16 s.
 OPENSKY_TIMEOUT = httpx.Timeout(8.0, connect=3.0)
 OPENSKY_CLOUD_HINT = ("no answer from OpenSky from this cloud IP; OpenSky blocks many cloud-provider address ranges, so "
                       "the keyed gap fill rarely works on serverless hosts")

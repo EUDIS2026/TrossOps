@@ -21,6 +21,7 @@ import httpx
 
 USER_AGENT = "TrossOps/1.0 (operational picture research demo)"
 TIMEOUT_S = 8.0
+CONNECT_RETRIES = 1
 ERROR_BACKOFF_MAX_S = 60.0
 
 # Shared edge cache (Vercel CDN) in front of the feed endpoints. Serverless instances do not share memory, so without it
@@ -162,8 +163,11 @@ class Feed:
     # ---- plumbing ----------------------------------------------------------------------------------------------------
     def client(self) -> httpx.Client:
         if self._http is None or self._http_transport is not self.transport:
+            # Real network: retry a failed connection once (DNS hiccup, reset during a cold start's TLS handshake).
+            # httpx retries only connection errors, never a request the upstream has already seen.
+            transport = self.transport or httpx.HTTPTransport(retries=CONNECT_RETRIES)
             self._http = httpx.Client(timeout=TIMEOUT_S, headers={"User-Agent": USER_AGENT}, follow_redirects=True,
-                                      transport=self.transport)
+                                      transport=transport)
             self._http_transport = self.transport
         return self._http
 
