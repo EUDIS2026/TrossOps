@@ -28,7 +28,7 @@ from . import geo, sitegen
 from .motion import MotionSpec, Path, densify, racetrack
 
 ROUTE_CACHE = FsPath(__file__).resolve().parents[1] / "data" / "world_routes.json.gz"
-ROUTE_CACHE_VERSION = 11  # 7: sites on dry road-free ground (berths in the sea); columns and loops on the network
+ROUTE_CACHE_VERSION = 12  # 12: plausibility pass (field units by roads, Home Guard in own county, nearest reachable site fit); 11: platform-stable keys; 7: sites on dry road-free ground
 
 # Public reference points (city centres, coastal and sea waypoints), [lng, lat].
 P: dict[str, tuple[float, float]] = {
@@ -45,18 +45,18 @@ P: dict[str, tuple[float, float]] = {
     "vastervik": (16.63, 57.76), "soderhamn": (17.06, 61.30), "hudiksvall": (17.10, 61.73), "nynashamn": (17.95, 58.90),
     "ludvika": (15.19, 60.15), "eskilstuna": (16.51, 59.37), "motala": (15.04, 58.54), "borlange": (15.43, 60.49),
     "lidkoping": (13.16, 58.50), "kalix": (23.16, 65.85), "trelleborg": (13.16, 55.37), "simrishamn": (14.35, 55.56),
-    "hemse": (18.37, 57.24), "slite": (18.80, 57.71), "nybro": (15.91, 56.74), "solleftea": (17.27, 63.17),
+    "hemse": (18.37, 57.24), "karlshamn": (14.86, 56.17), "slite": (18.80, 57.71), "nybro": (15.91, 56.74), "solleftea": (17.27, 63.17),
     # sea waypoints (open water)
     "sea_stockholm_e": (19.40, 59.30), "sea_gotland_e": (19.60, 57.60), "sea_gotland_s": (18.30, 56.80), "sea_gotland_ne": (19.40, 58.25),
     "sea_oland_s": (16.60, 55.95), "sea_oland_e": (17.30, 56.80), "sea_bornholm_n": (14.90, 55.60), "sea_hano": (14.60, 55.75), "sea_oresund": (12.70, 55.80),
     "sea_kattegat": (11.50, 57.30), "sea_kattegat_n": (11.20, 57.85), "sea_bothnia_s": (18.80, 61.60), "sea_bothnia_m": (19.90, 62.90),
-    "sea_bothnia_n": (21.80, 64.60), "sea_bothnia_bay": (23.00, 65.30), "sea_landsort": (18.00, 58.60), "sea_aland": (19.30, 60.10),
+    "sea_bothnia_n": (21.80, 64.60), "sea_bothnia_bay": (23.00, 65.30), "sea_landsort": (18.00, 58.60), "sea_aland": (19.12, 60.15),
 }
 
 COUNTY_OF = {
     "stockholm": "01", "norrtalje": "01", "nynashamn": "01", "uppsala": "03", "enkoping": "03", "nykoping": "04", "eskilstuna": "04",
     "norrkoping": "05", "linkoping": "05", "motala": "05", "jonkoping": "06", "vaxjo": "07", "kalmar": "08", "oskarshamn": "08",
-    "vastervik": "08", "nybro": "08", "visby": "09", "hemse": "09", "slite": "09", "karlskrona": "10", "malmo": "12", "helsingborg": "12",
+    "vastervik": "08", "nybro": "08", "visby": "09", "hemse": "09", "karlshamn": "10", "slite": "09", "karlskrona": "10", "malmo": "12", "helsingborg": "12",
     "kristianstad": "12", "ystad": "12", "trelleborg": "12", "simrishamn": "12", "halmstad": "13", "goteborg": "14", "skovde": "14",
     "trollhattan": "14", "uddevalla": "14", "lidkoping": "14", "karlstad": "17", "orebro": "18", "vasteras": "19", "falun": "20",
     "mora": "20", "ludvika": "20", "borlange": "20", "gavle": "21", "soderhamn": "21", "hudiksvall": "21", "sundsvall": "22",
@@ -114,19 +114,19 @@ class SiteDef:
 SITES: list[SiteDef] = [
     SiteDef("hq-joint", "Joint Operations HQ", "hq", "enkoping", (6, 3), 30, "Joint Staff", ["command", "comms_hub"], sidc="SFGPUH----H-", layer="sites.land"),
     SiteDef("airbase-norr", "Airbase Norr", "airbase", "lulea", (-9, 4), 140, "Air Wing North", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
-    SiteDef("airbase-syd", "Airbase Syd", "airbase", "kristianstad", (9, -3), 10, "Air Wing South", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
-    SiteDef("airbase-vast", "Airbase Väst", "airbase", "lidkoping", (6, 3), 50, "Air Wing West", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
+    SiteDef("airbase-syd", "Airbase Syd", "airbase", "kristianstad", (2.7, 9.4), 10, "Air Wing South", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
+    SiteDef("airbase-vast", "Airbase Väst", "airbase", "skovde", (-12.37, 12.12), 50, "Air Wing West", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
     SiteDef("airbase-mitt", "Airbase Mitt", "airbase", "uppsala", (-5, 6), 10, "Air Wing Centre", ["transport", "aew", "fuel"], sidc="SFGPIBA---H-", layer="sites.air"),
-    SiteDef("airbase-ost", "Heliport Öst", "airbase", "linkoping", (-4, 4), 110, "Helicopter Wing", ["helicopter", "maintenance", "fuel"], sidc="SFGPIBA---H-", layer="sites.air"),
+    SiteDef("airbase-ost", "Heliport Öst", "airbase", "linkoping", (10.12, -13.47), 200, "Helicopter Wing", ["helicopter", "maintenance", "fuel"], sidc="SFGPIBA---H-", layer="sites.air"),
     SiteDef("garrison-norr", "Garrison Norr", "garrison", "boden", (-4, 2), 90, "Brigade North", ["armour", "logistics", "medical"], sidc="SFGPIB----H-"),
     SiteDef("garrison-fjall", "Garrison Fjäll", "garrison", "arvidsjaur", (2, 1), 70, "Brigade North", ["rangers", "winter"], sidc="SFGPIB----H-"),
     SiteDef("garrison-mitt", "Garrison Mitt", "garrison", "enkoping", (-8, -4), 20, "Brigade Centre", ["mech_infantry", "logistics"], sidc="SFGPIB----H-"),
     SiteDef("garrison-syd", "Garrison Syd", "garrison", "kristianstad", (-6, 5), 160, "Brigade South", ["armour", "mech_infantry"], sidc="SFGPIB----H-"),
     SiteDef("garrison-vast", "Garrison Väst", "garrison", "skovde", (3, -2), 0, "Brigade West", ["armour", "training"], sidc="SFGPIB----H-"),
     SiteDef("garrison-gotland", "Garrison Gotland", "garrison", "visby", (4, -6), 30, "Battlegroup Gotland", ["mech_infantry", "air_defence"], sidc="SFGPIB----H-"),
-    SiteDef("navbase-syd", "Naval Base Syd", "navbase", "karlskrona", (3, -2.5), 160, "Naval Flotilla South", ["corvette", "mine_warfare", "submarine", "fuel"], sidc="SFGPIBN-----", layer="sites.sea"),
-    SiteDef("navbase-ost", "Naval Base Öst", "navbase", "nynashamn", (2.5, -1.5), 120, "Naval Flotilla East", ["patrol_boat", "amphibious", "fuel"], sidc="SFGPIBN-----", layer="sites.sea"),
-    SiteDef("navbase-vast", "Naval Station Väst", "navbase", "goteborg", (-9, -4), 260, "Naval Station West", ["patrol_boat", "coast_guard"], sidc="SFGPIBN-----", layer="sites.sea"),
+    SiteDef("navbase-syd", "Naval Base Syd", "navbase", "karlshamn", (-1.67, -2.38), 220, "Naval Flotilla South", ["corvette", "mine_warfare", "submarine", "fuel"], sidc="SFGPIBN-----", layer="sites.sea"),
+    SiteDef("navbase-ost", "Naval Base Öst", "navbase", "nynashamn", (2.26, 10.14), 90, "Naval Flotilla East", ["patrol_boat", "amphibious", "fuel"], sidc="SFGPIBN-----", layer="sites.sea"),
+    SiteDef("navbase-vast", "Naval Station Väst", "navbase", "goteborg", (-11.24, 9.67), 200, "Naval Station West", ["patrol_boat", "coast_guard"], sidc="SFGPIBN-----", layer="sites.sea"),
     SiteDef("depot-mitt", "Central Depot Mitt", "depot", "orebro", (6, 4), 0, "Logistics Regiment", ["ammunition", "spares", "fuel"], sidc="SFGPIRP-----", layer="sites.logistics"),
     SiteDef("depot-norr", "Depot Norr", "depot", "ostersund", (3, -3), 0, "Logistics Regiment", ["fuel", "spares", "winter"], sidc="SFGPIRP-----", layer="sites.logistics"),
     SiteDef("depot-syd", "Depot Syd", "depot", "vaxjo", (-5, 2), 0, "Logistics Regiment", ["ammunition", "fuel"], sidc="SFGPIRP-----", layer="sites.logistics"),
@@ -138,7 +138,7 @@ SITES: list[SiteDef] = [
     SiteDef("radar-syd", "Sensor Site Syd", "radar", "ystad", (8, 3), 0, "Sea Surveillance", ["radar", "sea_picture"], sidc="SFGPIR------", layer="infra.sensors"),
     SiteDef("radar-vast", "Sensor Site Väst", "radar", "uddevalla", (-9, 2), 0, "Sea Surveillance", ["radar", "sea_picture"], sidc="SFGPIR------", layer="infra.sensors"),
     SiteDef("radar-ost", "Sensor Site Öst", "radar", "norrtalje", (8, -6), 0, "Air Surveillance", ["radar", "air_picture", "sea_picture"], sidc="SFGPIR------", layer="infra.sensors"),
-    SiteDef("radar-bothnia", "Sensor Site Bothnia", "radar", "harnosand", (6, 3), 0, "Air Surveillance", ["radar", "air_picture"], sidc="SFGPIR------", layer="infra.sensors"),
+    SiteDef("radar-bothnia", "Sensor Site Bothnia", "radar", "harnosand", (2.6, -2.2), 0, "Air Surveillance", ["radar", "air_picture"], sidc="SFGPIR------", layer="infra.sensors"),
     SiteDef("comms-mitt", "Comms Node Mitt", "comms", "eskilstuna", (2, 6), 0, "Signals Regiment", ["comms_hub"], sidc="SFGPIUT-----", layer="infra.comms"),
     SiteDef("comms-norr", "Comms Node Norr", "comms", "sundsvall", (-3, 5), 0, "Signals Regiment", ["comms_hub"], sidc="SFGPIUT-----", layer="infra.comms"),
     SiteDef("comms-syd", "Comms Node Syd", "comms", "jonkoping", (5, -5), 0, "Signals Regiment", ["comms_hub"], sidc="SFGPIUT-----", layer="infra.comms"),
@@ -149,9 +149,9 @@ SITES: list[SiteDef] = [
     SiteDef("power-vast", "Grid Node Väst", "power", "trollhattan", (4, 3), 0, "Grid operator (public)", ["power"], "civil", "SNGPIUE-----", "infra.power"),
     SiteDef("port-goteborg", "Port Göteborg (civil)", "port", "goteborg", (-4, -3), 0, "Port authority (public)", ["port", "fuel"], "civil", "SNGPIBN-----", "infra.transport"),
     SiteDef("port-trelleborg", "Port Trelleborg (civil)", "port", "trelleborg", (0, 0), 0, "Port authority (public)", ["port"], "civil", "SNGPIBN-----", "infra.transport"),
-    SiteDef("port-lulea", "Port Luleå (civil)", "port", "lulea", (3, -3), 0, "Port authority (public)", ["port", "fuel"], "civil", "SNGPIBN-----", "infra.transport"),
-    SiteDef("bridge-oresund", "Öresund crossing (civil)", "bridge", "malmo", (-6, 0), 0, "Transport authority (public)", ["transport"], "civil", "SNGPIT------", "infra.transport"),
-    SiteDef("bridge-hoga", "Höga Kusten crossing (civil)", "bridge", "harnosand", (4, 8), 0, "Transport authority (public)", ["transport"], "civil", "SNGPIT------", "infra.transport"),
+    SiteDef("port-lulea", "Port Luleå (civil)", "port", "lulea", (2.5, -0.5), 0, "Port authority (public)", ["port", "fuel"], "civil", "SNGPIBN-----", "infra.transport"),
+    SiteDef("bridge-oresund", "Öresund crossing (civil)", "bridge", "malmo", (-5.3, -5.0), 0, "Transport authority (public)", ["transport"], "civil", "SNGPIT------", "infra.transport"),
+    SiteDef("bridge-hoga", "Höga Kusten crossing (civil)", "bridge", "harnosand", (-1.3, 17.5), 0, "Transport authority (public)", ["transport"], "civil", "SNGPIT------", "infra.transport"),
     SiteDef("telecom-stockholm", "Telecom core Stockholm (civil)", "telecom", "stockholm", (-3, 5), 0, "Telecom operator (public)", ["telecom"], "civil", "SNGPIUT-----", "infra.telecom"),
     SiteDef("telecom-goteborg", "Telecom core Göteborg (civil)", "telecom", "goteborg", (5, 4), 0, "Telecom operator (public)", ["telecom"], "civil", "SNGPIUT-----", "infra.telecom"),
 ]
@@ -343,6 +343,135 @@ def at_sea(cache: "RouteCache", p: tuple[float, float], max_m: float = 15_000.0)
     return cache.get(RouteCache.key("sea-point", p, max_m), compute)[0]
 
 
+# Built-up radius around each reference town centre: field units, AD batteries and the like deploy outside it.
+URBAN_KM = {"stockholm": 12.0, "goteborg": 9.0, "malmo": 7.0, "uppsala": 5.0, "linkoping": 4.5, "orebro": 4.5, "vasteras": 4.5, "helsingborg": 4.5,
+            "norrkoping": 4.5, "jonkoping": 4.5, "umea": 4.0, "lulea": 3.5}
+
+
+def urban(p: tuple[float, float], margin_km: float = 0.0) -> str | None:
+    """The reference town whose built-up area contains p (default radius 3 km), else None."""
+    for k, c in P.items():
+        if not k.startswith("sea_") and geo.haversine_m(c, p) < (URBAN_KM.get(k, 3.0) + margin_km) * 1000:
+            return k
+    return None
+
+
+FIELD_CLASSES = {"secondary", "tertiary"}
+
+
+def road_reachable(mask, p: tuple[float, float], roads: set[int], max_cells: int = 45) -> bool:
+    """Can a road of the routing graphs (`roads`: national, city and island networks) be reached from p over dry
+    ground within ~max_cells land-mask cells (~110 m each)? Minor roads do not count: an islet can have its own
+    tracks and still be cut off from the network. False for anything on such an island."""
+    c0 = mask.cell(p)
+    if c0 < 0:
+        return False
+    r0, q0 = divmod(c0, mask.w)
+    seen, frontier = {c0}, [c0]
+    while frontier:
+        nxt = []
+        for c in frontier:
+            r, q = divmod(c, mask.w)
+            if c in roads:
+                return True
+            for rr, qq in ((r + 1, q), (r - 1, q), (r, q + 1), (r, q - 1)):
+                n = rr * mask.w + qq
+                if abs(rr - r0) > max_cells or abs(qq - q0) > max_cells or n in seen:
+                    continue
+                seen.add(n)
+                if mask.is_dry((mask.lng0 + (qq + 0.5) * mask.dlng, mask.lat1 - (rr + 0.5) * mask.dlat)):
+                    nxt.append(n)
+        frontier = nxt
+    return False
+
+
+def beside(cache: "RouteCache", anchor: tuple[float, float], bearing: float, dist_m: float,
+           outside: list[tuple[float, float]] | None = None) -> tuple[float, float]:
+    """A dry, road-free point about dist_m from `anchor` toward `bearing`, reachable from the anchor on foot (the
+    straight line does not cross water) and not inside the `outside` ring (a site's fence): the first bearing in
+    30-degree steps that works. Cached."""
+    def compute():
+        mask = land_mask()
+        if mask is None:
+            return [geo.destination(anchor, bearing, dist_m)]
+        blocked = road_cells_near(anchor)
+        first = None
+        for roads in (blocked, None):  # road-free ground first; a verge beside a road if that is all there is
+            for turn in (0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180):
+                q = mask.nearest_dry(geo.destination(anchor, bearing + turn, dist_m), dist_m, blocked=roads)
+                if q is None:
+                    continue
+                if outside and geo.point_in_ring(q, outside):
+                    continue
+                first = first or q
+                if mask.leg_dry(anchor, q, 25.0):
+                    return [q]
+        return [first or on_ground(cache, anchor)]
+    return cache.get(RouteCache.key("beside", anchor, bearing, dist_m, bool(outside)), compute)[0]
+
+
+def field_anchor(cache: "RouteCache", center: tuple[float, float], radius_m: float = 3000.0) -> tuple[float, float]:
+    """A road vertex near `center` that a unit in the field could actually reach and hide beside: on a
+    secondary/tertiary road (any class on Gotland), on dry ground, outside the built-up area of a town. The
+    search widens when nothing qualifies; the declared point is the last resort. Cached."""
+    def compute():
+        net, mask = road_net(center), land_mask()
+        if net is None:
+            return [center]
+        classes = None if on_gotland(center) else FIELD_CLASSES
+        for r in (radius_m, radius_m * 2, radius_m * 4):
+            for q in net.nodes_within(center, r, classes):
+                if (mask is None or mask.is_dry(q)) and not urban(q):
+                    return [(round(q[0], 6), round(q[1], 6))]
+        return [center]
+    return cache.get(RouteCache.key("anchor", center, radius_m), compute)[0]
+
+
+def field_positions(cache: "RouteCache", center: tuple[float, float], radius_m: float, seed: int, n: int,
+                    min_sep_m: float = 40.0) -> list[tuple[float, float]]:
+    """`n` dispersed vehicle positions for a unit in the field around `center`: each 30-80 m off a real road
+    (secondary/tertiary; any class on Gotland), on dry ground, not on the road itself, outside towns, and at least
+    `min_sep_m` from each other. The road vertices used are spread out (>= 120 m apart) so a company reads as a
+    dispersed position, not a heap. Cached as one list."""
+    def compute():
+        rng = random.Random(seed)
+        net, mask = road_net(center), land_mask()
+        bases: list[tuple[float, float]] = []
+        if net is not None:
+            classes = None if on_gotland(center) else FIELD_CLASSES
+            for r in (radius_m, radius_m * 1.6, radius_m * 2.5):
+                cand = [q for q in net.nodes_within(center, r, classes) if (mask is None or mask.is_dry(q)) and not urban(q)]
+                rng.shuffle(cand)
+                bases = []
+                for q in cand:
+                    if all(geo.haversine_m(q, b) >= 120.0 for b in bases):
+                        bases.append(q)
+                        if len(bases) >= n:
+                            break
+                if len(bases) >= max(3, n // 2):
+                    break
+        if not bases:
+            bases = [field_anchor(cache, center, radius_m)]
+        blocked = road_cells_near(center) if mask is not None else None
+        out: list[tuple[float, float]] = []
+        for i in range(n):
+            base = bases[i % len(bases)]
+            best = None
+            for _ in range(12):
+                p = geo.destination(base, rng.uniform(0, 360), rng.uniform(30, 80))
+                q = mask.nearest_dry(p, 600.0, blocked=blocked) if mask is not None else p
+                if q is None or (mask is not None and not mask.leg_dry(base, q, 25.0)):  # no wading to the position
+                    continue
+                if all(geo.haversine_m(q, o) >= min_sep_m for o in out):
+                    best = q
+                    break
+                best = best or q
+            p = best or base
+            out.append((round(p[0], 6), round(p[1], 6)))
+        return out
+    return cache.get(RouteCache.key("field", center, radius_m, seed, n, min_sep_m), compute)
+
+
 def street_loop(cache: RouteCache, city: str, seed: int, start: tuple[float, float], length_m: float) -> list[tuple[float, float]]:
     def compute():
         gn = _geonet()
@@ -467,19 +596,32 @@ class Orbat:
             roads = road_cells_near(c0)
             turns = (0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180) if s.kind == "navbase" else (0, 45, -45, 90)
             # prefer ground free of every road (incl. minor roads), then free of graph roads, then just dry
+            # Within a pass the nearest fit over *all* axis turns wins (the declared axis on ties): taking the first
+            # axis that fits anywhere put naval bases 35-55 km from their town when a turned layout fitted at 12-16 km.
             for blocked, minor in ((roads, True), (roads, False), (None, False)):
+                best: tuple[float, tuple[float, float], float] | None = None
                 for turn in turns:
                     axis = (s.axis + turn) % 360
+                    limit = best[0] if best else (60_000.0 if s.kind == "navbase" else 25_000.0)
                     dry, wet, sea, core = sitegen.placement_samples(self._layout(s, c0, axis))
-                    for tried, (de, dn) in enumerate(mask.candidates(c0, dry, max_m=60_000.0 if s.kind == "navbase" else 25_000.0, wet=wet or None, blocked=blocked, sea=sea or None, minor=minor, core=core)):
+                    misfits = 0
+                    for de, dn in mask.candidates(c0, dry, max_m=limit, wet=wet or None, blocked=blocked, sea=sea or None, minor=minor, core=core):
+                        if best and math.hypot(de, dn) >= best[0]:
+                            break
                         c = mask.shift(c0, de, dn)
                         c = (round(c[0], 6), round(c[1], 6))
                         # the layout rebuilt at c (local metric frame) must pass exactly, not just the shifted samples
                         dry2, wet2, sea2, core2 = sitegen.placement_samples(self._layout(s, c, axis))
-                        if mask.dry_ok(dry2, blocked, minor, core2) and all(mask.is_water(q) for q in wet2) and all(mask.wet_ok(q, True) for q in sea2):
-                            return [c, (axis, 0.0)]
-                        if tried > 40:
+                        if not (mask.dry_ok(dry2, blocked, minor, core2) and all(mask.is_water(q) for q in wet2) and all(mask.wet_ok(q, True) for q in sea2)):
+                            misfits += 1
+                            if misfits > 200:  # near a coastline the shifted samples and the rebuilt layout can disagree
+                                break
+                            continue
+                        if road_reachable(mask, c, roads):  # not on a roadless islet (those do not use up the budget)
+                            best = (math.hypot(de, dn), c, axis)
                             break
+                if best:
+                    return [best[1], (best[2], 0.0)]
             return [c0, (s.axis, 0.0)]
         got = self.cache.get(RouteCache.key("site", s.id, s.kind, c0, s.axis), compute)
         return got[0], got[1][0]
@@ -564,13 +706,15 @@ class Orbat:
 
     def _air_force(self) -> None:
         self.formation("fm-air", "Air Force", "AF", "SFAPM-------", "service", "fm-sweden", "air", "air")
+        # CAP orbits stay over Swedish territory or the Swedish side of international water: clear of Finland,
+        # the Åland demilitarised zone and the Danish territorial sea around Bornholm.
         wings = [
             ("aw-n", "Air Wing North", "AW N", "airbase-norr", [("sq-n1", "1st Fighter Squadron", 12), ("sq-n2", "2nd Fighter Squadron", 12)],
-             [racetrack(pt("sea_bothnia_bay"), 60, 70_000, 14_000), racetrack(pt("kalix", 0, 60), 150, 60_000, 12_000)]),
+             [racetrack(pt("sea_bothnia_bay", -20, -15), 30, 60_000, 12_000), racetrack(pt("kalix", -30, 60), 150, 60_000, 12_000)]),
             ("aw-s", "Air Wing South", "AW S", "airbase-syd", [("sq-s1", "3rd Fighter Squadron", 12), ("sq-s2", "4th Fighter Squadron", 12)],
-             [racetrack(pt("sea_gotland_s"), 30, 80_000, 15_000), racetrack(pt("sea_bornholm_n"), 80, 60_000, 12_000)]),
+             [racetrack(pt("sea_gotland_s"), 30, 80_000, 15_000), racetrack(pt("sea_bornholm_n", 0, 12), 80, 60_000, 12_000)]),
             ("aw-w", "Air Wing West", "AW W", "airbase-vast", [("sq-w1", "5th Fighter Squadron", 12), ("sq-w2", "6th Fighter Squadron", 12)],
-             [racetrack(pt("sea_kattegat"), 20, 70_000, 13_000), racetrack(pt("sea_aland"), 160, 70_000, 14_000)]),
+             [racetrack(pt("sea_kattegat"), 20, 70_000, 13_000), racetrack((10.95, 58.35), 0, 60_000, 12_000)]),
         ]
         for wid, wlabel, wshort, base, sqs, caps in wings:
             self.formation(f"fm-{wid}", wlabel, wshort, "SFAPMFF---H-", "regiment", "fm-air", "air.fighter", "air", region=self.region_of(self.sites[base]))
@@ -663,7 +807,7 @@ class Orbat:
                     self.add(node)
         # UAV detachment
         self.formation("fm-uav", "UAV Squadron", "UAV", "SFAPMFQ---F-", "battalion", "fm-air", "air.uav", "air")
-        for k, (gar, orbit_c) in enumerate([("garrison-norr", pt("haparanda", -15, 5)), ("garrison-gotland", pt("hemse", 15, 0)), ("garrison-syd", pt("simrishamn", 5, -12)),
+        for k, (gar, orbit_c) in enumerate([("garrison-norr", pt("haparanda", -15, 5)), ("garrison-gotland", pt("hemse", 15, 0)), ("garrison-syd", pt("simrishamn", -8, -3)),
                                             ("garrison-mitt", pt("norrtalje", 15, 0))]):
             c = self.sites[gar]
             loop = [geo.destination(orbit_c, b, 6000) for b in range(0, 361, 20)]
@@ -755,24 +899,12 @@ class Orbat:
         return place
 
     def in_field(self, center: tuple[float, float], facing: float, radius_m: float, seed: int):
-        """Dispersed field positions next to real roads around `center`, vehicles facing the threat axis."""
-        rng = random.Random(seed)
-        nodes: list[tuple[float, float]] = []
-        net = road_net(center)
-        mask = land_mask()
-        if net is not None:
-            cand = list(net.nodes_within(center, radius_m, {"secondary", "tertiary", "minor"} if on_gotland(center) else {"secondary", "tertiary"}))
-            rng.shuffle(cand)
-            nodes = [q for q in cand if mask is None or mask.is_dry(q)][:64]  # not bridge nodes
-
+        """Dispersed field positions next to real roads around `center` (outside towns, spaced apart, never on the
+        road or in water), vehicles facing the threat axis."""
         def place(i: int, total: int) -> MotionSpec:
-            if nodes:
-                base = nodes[i % len(nodes)]
-                p = geo.destination(base, rng.uniform(0, 360), rng.uniform(25, 60))
-            else:
-                p = geo.destination(center, rng.uniform(0, 360), rng.uniform(0.2, 1.0) * radius_m)
-            p = on_ground(self.cache, p, max_m=800.0)
-            return MotionSpec("static", pos=(p[0], p[1], None), heading=(facing + rng.uniform(-25, 25)) % 360)
+            p = field_positions(self.cache, center, radius_m, seed, total)[i]
+            turn = random.Random(seed * 1000 + i).uniform(-25, 25)
+            return MotionSpec("static", pos=(p[0], p[1], None), heading=(facing + turn) % 360)
         return place
 
     def on_road(self, rid: str, a: tuple[float, float], b: tuple[float, float], speed: float, start_s: float, hold_s: float, spacing_m: float = 70.0):
@@ -843,7 +975,7 @@ class Orbat:
         # Ranger battalion (north, winter)
         self.formation("fm-bn-rgr", "Ranger Battalion", "Rgr Bn", "SFGPUCIS---F", "battalion", "fm-bde-n", "land.manoeuvre", "land", region="25")
         for ci, letter in enumerate("abc"):
-            place = self.in_field(pt("gallivare", 30, -20), 30, 6000, 900 + ci) if letter == "a" else self.at_garrison("garrison-fjall")
+            place = self.in_field(pt("gallivare", 30, -20), 30, 2500, 900 + ci) if letter == "a" else self.at_garrison("garrison-fjall")
             self._company(f"fm-coy-r{letter}", f"Ranger Company {letter.upper()}", f"R{letter.upper()}", "SFGPUCIS---E", "fm-bn-rgr", "land.manoeuvre", "25", [("bv", 8)], place)
         # Battlegroup Gotland
         self.formation("fm-bg-g", "Battlegroup Gotland", "BG G", "SFGPUCIZ---G", "regiment", "fm-army", "land.manoeuvre", "land", region="09")
@@ -858,7 +990,8 @@ class Orbat:
 
     def _ad_unit(self, cid: str, label: str, parent: str, region: str | None, center: tuple[float, float], launchers: int, radars: int, plat: str, range_km: float) -> None:
         self.formation(cid, label, label.split(" ")[-1] if "Battery" not in label else label.replace("AD Battery ", "Bty "), "SFGPUCD----E", "company", parent, "land.ad", "land", region=region, caps=["air_defence"])
-        center = on_ground(self.cache, center)
+        # the fire unit deploys beside a road it can reach, outside towns; the radar stands just off that road
+        center = on_ground(self.cache, geo.destination(field_anchor(self.cache, center, 2500.0), stable_seed(cid, "fcr") % 360, 90.0), max_m=1500.0)
         for i, (p, b) in enumerate(sitegen.ad_battery_positions(center, 0, launchers, 1800 if range_km > 50 else 900, stable_seed(cid))):
             p = on_ground(self.cache, p, max_m=1500.0)
             n = self.vehicle(f"{cid[3:]}-l{i + 1}", f"{label} L{i + 1}", "ad_launcher", cid, region, MotionSpec("static", pos=(p[0], p[1], None), heading=b))
@@ -938,24 +1071,47 @@ class Orbat:
                 self.add(node)
 
     # -- home guard -------------------------------------------------------------------------------------------------
+    def _guard_posts(self, sid: str) -> list[tuple[float, float]]:
+        """Two guard posts just outside a site's fence on opposite sides (a naval base: its land gate and one flank)."""
+        lay = self.layouts[sid]
+        ring = lay.footprint
+        edges = (3, 0) if lay.kind == "navbase" else (0, 2)
+        posts = []
+        for k in edges:
+            a, b = ring[k], ring[(k + 1) % (len(ring) - 1)]
+            mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+            posts.append(beside(self.cache, (round(mid[0], 6), round(mid[1], 6)), round(geo.bearing_deg(lay.center, mid), 1), 150.0, ring))
+        return posts
+
     def _home_guard(self) -> None:
         self.formation("fm-hg", "Home Guard", "HG", "SFGPUCI----I", "division", "fm-army", "land.homeguard", "land")
-        protect = {s.id: self.sites[s.id] for s in SITES if s.kind in ("power", "port", "bridge", "telecom", "comms", "radar", "depot")}
+        # A battalion guards objects in its own county (each object by one company): civil infrastructure, sensors,
+        # depots and the bases themselves. The rest of its companies hold area-security positions on the outskirts
+        # of the county seat.
+        kinds = ("power", "port", "bridge", "telecom", "comms", "radar", "depot", "airbase", "navbase", "hq", "hospital")
         for code, county, seat in COUNTY_SEATS:
             bid = f"fm-hg-{code}"
             self.formation(bid, f"Home Guard Battalion {county}", f"HG {county}", "SFGPUCI----F", "battalion", "fm-hg", "land.homeguard", "land", region=code)
-            near = sorted(protect.items(), key=lambda kv: geo.haversine_m(kv[1], P[seat]))[:2]
+            own = [s.id for s in SITES if s.kind in kinds and COUNTY_OF.get(s.near) == code]
+            near = sorted(own, key=lambda sid: (geo.haversine_m(self.sites[sid], P[seat]), sid))[:2]
             for ci in range(3):
                 cid = f"fm-hg-{code}-{ci + 1}"
                 self.formation(cid, f"HG {county} Company {ci + 1}", f"{ci + 1}", "SFGPUCI----E", "company", bid, "land.homeguard", "land", region=code)
-                if ci < len(near) and geo.haversine_m(near[ci][1], P[seat]) < 120_000:
-                    c = geo.destination(near[ci][1], 200 + ci * 60, 450)
-                    task = f"Protect {near[ci][0]}"
+                if ci < len(near):
+                    task = f"Protect {near[ci]}"
+                    posts = self._guard_posts(near[ci])
                 else:
-                    c = pt(seat, (ci - 1) * 4, 2)
                     task = "Area security"
+                    out = geo.destination(P[seat], (stable_seed(code, ci) % 360), (URBAN_KM.get(seat, 3.0) + 1.5) * 1000)
+                    a = field_anchor(self.cache, out, 2500.0)
+                    posts = [beside(self.cache, a, 60, 90.0)]
+                    for b, d in ((240, 90.0), (150, 250.0), (330, 400.0)):  # the second platoon on another spot
+                        q = beside(self.cache, a, b, d)
+                        if geo.haversine_m(q, posts[0]) >= 60:
+                            break
+                    posts.append(q)
                 for t in range(2):
-                    p = on_ground(self.cache, geo.destination(c, t * 140, 120))
+                    p = posts[t]
                     self.add(Node(f"hg-{code}-{ci + 1}{'ab'[t]}", f"HG {county} {ci + 1}{'AB'[t]}", "personnel", "land", "land.homeguard", "SFGPUCI----D", "own", cid,
                                   None, f"{ci + 1}{'AB'[t]}", "Home Guard platoon", "personnel", None, code, ["guard", "area_security"],
                                   MotionSpec("static", pos=(p[0], p[1], None), heading=t * 140), crew=30, range_km=20, tags=[task]))
