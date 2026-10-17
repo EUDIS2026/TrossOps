@@ -49,7 +49,7 @@ def explode(request: httpx.Request) -> httpx.Response:
 @pytest.fixture(autouse=True)
 def clean_feeds(monkeypatch):
     for name in ("TROSSOPS_FEEDS", "VERCEL", "AISSTREAM_API_KEY", "TRAFIKVERKET_API_KEY", "OPENSKY_CLIENT_ID",
-                 "OPENSKY_CLIENT_SECRET"):
+                 "OPENSKY_CLIENT_SECRET", "FIRMS_MAP_KEY", "LANTMATERIET_TOKEN", "LANTMATERIET_CLIENT_ID", "LANTMATERIET_CLIENT_SECRET", "LANTMATERIET_USERNAME", "LANTMATERIET_PASSWORD"):
         monkeypatch.delenv(name, raising=False)
     for f in feeds.FEEDS.values():
         f.reset()
@@ -70,7 +70,7 @@ def test_kill_switch_blocks_every_feed_without_network(monkeypatch):
         assert body["stale"] is False and body["fetchedAt"] is None
         st = f.status()
         assert set(st) >= {"id", "label", "category", "status", "lastOkAt", "lastError", "count", "licence", "url", "note", "stale"}
-        assert st["category"] in {"air", "sea", "weather", "civil", "space"}
+        assert st["category"] in {"air", "sea", "weather", "civil", "space", "terrain"}
 
 
 def test_status_before_first_fetch_is_not_presented_as_working():
@@ -597,3 +597,84 @@ def test_firms_csv_parsing_and_errors():
         assert False
     except FeedError:
         pass
+
+
+# ---- Lantmäteriet Markhöjd ---------------------------------------------------------------------------------------------------
+def test_markhojd_projection_and_resample():
+    from app.feeds.markhojd import resample, to_sweref99tm
+    assert to_sweref99tm(15.0, 0.0) == pytest.approx((500_000.0, 0.0), abs=1e-6)
+    e, n = to_sweref99tm(18.0686, 59.3293)  # central Stockholm
+    assert e == pytest.approx(674_571.9, abs=1.0) and n == pytest.approx(6_580_743.0, abs=1.0)
+    pts, dist = resample([(15.0, 60.0), (15.0, 60.1), (15.2, 60.1)], 11)
+    assert len(pts) == 11 and dist[0] == 0 and pts[0] == (15.0, 60.0) and pts[-1] == pytest.approx((15.2, 60.1))
+
+
+def markhojd_routes(ground):
+    """Mock API: ground(e, n) -> elevation; token endpoint answers client credentials."""
+    def hojd(request):
+        if request.method == "GET":
+            e, n = float(request.url.params["e"]), float(request.url.params["n"])
+            return httpx.Response(200, json={"type": "Feature", "geometry": {"type": "Point", "coordinates": [e, n, ground(e, n)]}, "properties": {"nodatavalue": -9999}})
+        body = json.loads(request.content)
+        assert body["crs"]["properties"]["name"] == "urn:ogc:def:crs:EPSG::3006" and len(body["coordinates"]) <= 1000
+        assert request.headers["Authorization"] == "Bearer tok"
+        return httpx.Response(200, json={"type": "Feature", "geometry": {"type": body["type"], "coordinates": [[e, n, ground(e, n)] for e, n in body["coordinates"]]},
+                                         "properties": {"nodatavalue": -9999}})
+    token = lambda r: httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})  # noqa: E731
+    return [("oauth2/token", token), ("markhojd/v1/hojd", hojd)]
+
+
+def test_markhojd_adapter_only_then_working(monkeypatch):
+    st = feeds.MARKHOJD.status()
+    assert st["status"] == "adapter-only" and "LANTMATERIET_PASSWORD" in st["note"] and st["category"] == "terrain"
+    monkeypatch.setenv("LANTMATERIET_CLIENT_ID", "id")
+    monkeypatch.setenv("LANTMATERIET_CLIENT_SECRET", "secret")
+    feeds.MARKHOJD.transport = mock(markhojd_routes(lambda e, n: 21.5))
+    body = feeds.MARKHOJD.get()
+    assert body["status"] == "working" and body["probe"]["elevationM"] == 21.5
+    assert feeds.MARKHOJD.elevations([(18.0, 59.3), (18.1, 59.3)]) == [21.5, 21.5]
+
+
+def test_markhojd_line_of_sight_finds_a_ridge(monkeypatch):
+    from app.feeds.markhojd import to_sweref99tm
+    monkeypatch.setenv("LANTMATERIET_TOKEN", "tok")
+    ridge_e = to_sweref99tm(15.5, 62.0)[0]
+    feeds.MARKHOJD.transport = mock(markhojd_routes(lambda e, n: 300.0 if abs(e - ridge_e) < 400 else (-9999 if e < 0 else 100.0)))
+    los = feeds.MARKHOJD.line_of_sight((15.3, 62.0), (15.7, 62.0), 2, 2)
+    assert los["visible"] is False and los["obstruction"]["groundM"] == 300.0
+    assert abs(los["obstruction"]["lng"] - 15.5) < 0.02
+    high = feeds.MARKHOJD.line_of_sight((15.3, 62.0), (15.7, 62.0), 600, 600)
+    assert high["visible"] is True and high["minClearanceM"] > 0
+
+
+def test_planner_terrain_annotation_flags_low_clearance():
+    from app import planner
+
+    class FakeTerrain:
+        def elevations(self, pts):
+            return [900.0 for _ in pts]
+
+        def profile(self, coords, samples):
+            return {"distanceM": [0, 1], "groundM": [10.0, 50.0], "minM": 10.0, "maxM": 50.0, "climbM": 40}
+
+    air = {"id": "direct", "airborne": True, "path": [[15, 60, 30], [15.5, 60, 1000], [16, 60, 30]], "notes": [], "basedOn": [], "risk": 0.0, "etaMin": 10, "feasible": True}
+    land = {"id": "fastest", "airborne": False, "path": [[15, 60, None], [15.1, 60, None]], "notes": [], "basedOn": [], "risk": 0.0, "etaMin": 30, "feasible": True}
+    result = {"options": [air, land], "recommended": "direct"}
+    planner.annotate_terrain(result, FakeTerrain())
+    assert air["terrain"]["minClearanceM"] == 100 and air["risk"] == 0.25 and "Terrain clearance only 100 m" in air["notes"][0]
+    assert land["terrain"]["climbM"] == 40 and "total climb 40 m" in land["basedOn"][0]
+
+
+def test_markhojd_basic_auth_with_geotorget_account(monkeypatch):
+    import base64
+    monkeypatch.setenv("LANTMATERIET_USERNAME", "user@example.org")
+    monkeypatch.setenv("LANTMATERIET_PASSWORD", "pw")
+    seen = []
+
+    def hojd(request):
+        seen.append(request.headers["Authorization"])
+        return httpx.Response(200, json={"type": "Feature", "geometry": {"type": "Point", "coordinates": [1, 2, 33.3]}, "properties": {}})
+
+    feeds.MARKHOJD.transport = mock([("markhojd/v1/hojd", hojd)])
+    assert feeds.MARKHOJD.get()["status"] == "working"
+    assert seen == ["Basic " + base64.b64encode(b"user@example.org:pw").decode()]

@@ -9,7 +9,8 @@ from fastapi import APIRouter, HTTPException, Query
 
 from . import feeds
 from .feeds.ais import merge_vessels
-from .feeds.base import feeds_disabled, parallel
+from .feeds import markhojd
+from .feeds.base import FeedError, feeds_disabled, parallel
 
 router = APIRouter(prefix="/api")
 
@@ -115,3 +116,39 @@ def traffic() -> dict:
 @router.get("/env/fires")
 def fires() -> dict:
     return feeds.FIRMS.get()
+
+
+def _lnglat(text: str) -> tuple[float, float]:
+    try:
+        lng, lat = (float(v) for v in text.split(","))
+    except ValueError:
+        raise HTTPException(422, "expected 'lng,lat'") from None
+    if not markhojd.in_sweden_box(lng, lat):
+        raise HTTPException(422, "point outside Sweden (Lantmäteriet elevation covers Sweden only)")
+    return lng, lat
+
+
+def _terrain():
+    if not feeds.MARKHOJD.available():
+        raise HTTPException(503, "terrain not configured: " + feeds.MARKHOJD.status()["note"])
+    return feeds.MARKHOJD
+
+
+@router.get("/terrain/elevation")
+def terrain_elevation(at: str = Query(..., description="lng,lat")) -> dict:
+    p = _lnglat(at)
+    try:
+        z = _terrain().elevations([p])[0]
+    except FeedError as exc:
+        raise HTTPException(502, str(exc)) from None
+    return {"lng": p[0], "lat": p[1], "groundM": z, "datum": "RH 2000", "source": feeds.MARKHOJD.attribution}
+
+
+@router.get("/terrain/los")
+def terrain_los(a: str = Query(..., description="observer lng,lat"), b: str = Query(..., description="target lng,lat"),
+                ha: float = Query(2.0, ge=0, le=20_000), hb: float = Query(2.0, ge=0, le=20_000)) -> dict:
+    pa, pb = _lnglat(a), _lnglat(b)
+    try:
+        return _terrain().line_of_sight(pa, pb, ha, hb)
+    except FeedError as exc:
+        raise HTTPException(502, str(exc)) from None
