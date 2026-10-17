@@ -34,6 +34,8 @@ Channel = Literal[
     "head_of_state_directive",
     "police_event",          # Polisen public events (real feed, municipality-level positions)
     "crisis_info",           # Krisinformation.se public crisis messages
+    "road_situation",        # Trafikverket road situations (real feed: accidents, obstructions, restrictions)
+    "thermal_anomaly",       # NASA FIRMS VIIRS thermal anomalies (real feed: fires, flares, industrial heat)
 ]
 AuthorLevel = Literal[
     "soldier", "platoon", "company", "battalion", "brigade", "regional", "joint", "national",

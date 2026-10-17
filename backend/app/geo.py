@@ -92,3 +92,22 @@ def grid_ring(key: tuple[int, int], cell_deg: float) -> list[LngLat]:
         (x * cell_deg, (y + 1) * cell_deg),
         (x * cell_deg, y * cell_deg),
     ]
+
+
+def project_on_line(p: LngLat, coords: list) -> tuple[float, float]:
+    """(distance from p to the polyline, distance along the polyline to the foot point), both in metres, on a local
+    equirectangular projection around p (well under 1 % error over the tens of kilometres it is used for)."""
+    if len(coords) == 1:
+        return haversine_m(p, (coords[0][0], coords[0][1])), 0.0
+    kx = 111_320 * math.cos(math.radians(p[1]))
+    best, along, run = float("inf"), 0.0, 0.0
+    for a, b in zip(coords, coords[1:]):
+        ax, ay, bx, by = (a[0] - p[0]) * kx, (a[1] - p[1]) * 110_540, (b[0] - p[0]) * kx, (b[1] - p[1]) * 110_540
+        dx, dy = bx - ax, by - ay
+        f = max(0.0, min(1.0, -(ax * dx + ay * dy) / ((dx * dx + dy * dy) or 1e-9)))
+        d = math.hypot(ax + f * dx, ay + f * dy)
+        seg = math.hypot(dx, dy)
+        if d < best:
+            best, along = d, run + f * seg
+        run += seg
+    return best, along

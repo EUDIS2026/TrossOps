@@ -31,6 +31,11 @@ class Context:
     sites: dict[str, tuple[float, float]] = field(default_factory=dict)
     # Sensor track history for unknown tracks: id -> {"dtS", "lng", "lat", "headingDeg", "speedMps"} observed dtS seconds ago.
     history: dict[str, dict] = field(default_factory=dict)
+    # Own road marches in motion: [{"id", "label", "entityIds", "lead", "routeId", "ahead": [(lng, lat)...] from the column's
+    # tail along its direction of travel, "lengthM" (tail to lead), "speedMps"}] (engine.columns_at).
+    columns: list[dict] = field(default_factory=list)
+    # Facts about the real feeds behind the inputs, e.g. {"thermalLatestAcquired": iso} (the last VIIRS overpass evidenced).
+    feed_meta: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -751,6 +756,178 @@ def r20(ctx: Context, fx: Effects) -> None:
                                                                 "Launch on request"], ["R20"], 60, 0.75, "low", {"flightHours": round(d / 1000 / 200, 2), "crewHours": 6})
                 for k, (c, d) in enumerate(candidates(ctx, ["sar", "medevac"], p, ["air"], limit=2), 1)]
         intervention(ctx, fx, f"iv-R20-{i.id}", a, "Be ready to support search and rescue for the aircraft in distress", p, opts)
+
+
+def tag_time(i: InputReport, key: str) -> datetime | None:
+    """A time carried in a `key:<iso>` tag (feed_inputs puts Trafikverket end times and FIRMS first detections there)."""
+    tag = next((t for t in i.tags if t.startswith(f"{key}:")), None)
+    return parse_iso(tag.split(":", 1)[1]) if tag else None
+
+
+def own_sites(ctx: Context) -> list[SceneEntity]:
+    return [e for e in ctx.entities.values() if e.affiliation == "own" and e.kind in ("facility", "infrastructure") and e.position]
+
+
+def nearest_site(ctx: Context, p: tuple[float, float]) -> tuple[SceneEntity, float] | None:
+    return min(((s, geo.haversine_m(p, pos(s))) for s in own_sites(ctx)), key=lambda x: x[1], default=None)  # type: ignore[arg-type]
+
+
+def declared_option(oid: str, title: str, rationale: str, steps: list[str], assigned: list[str], eta_min: float | None, success: float, risk: str,
+                    rule_id: str) -> InterventionOption:
+    """An option that is a decision rather than a tasking (re-route, hold): declared success figure, standard outcome bands."""
+    eta = eta_min or 0.0
+    return InterventionOption(id=oid, title=title, rationale=rationale, steps=steps, assignedEntityIds=assigned, etaMin=round(eta_min, 1) if eta_min is not None else None,
+                              successLikelihood=success, riskLevel=risk, resourceCost={}, ruleIds=[rule_id],  # type: ignore[arg-type]
+                              outcomes=[OutcomeBand(label="best", probability=round(success * 0.45, 2), timeToEffectMin=round(eta * 0.9, 1), description="Effect achieved early."),
+                                        OutcomeBand(label="expected", probability=round(success * 0.55, 2), timeToEffectMin=round(eta * 1.15, 1), description="Effect achieved on schedule."),
+                                        OutcomeBand(label="worst", probability=round(1 - success, 2), timeToEffectMin=round(eta * 1.6, 1), description="Delay; fallback required.")])
+
+
+ROAD_ON_ROUTE_M = 500  # a Trafikverket situation this close to a column's route is on the route (OSM road geometry vs Trafikverket's point)
+ROAD_SITE_M = 5_000  # an accident or obstruction this close to an own site is access context
+ROAD_KINDS = ("accident", "obstruction", "restriction", "traffic_info")
+ROAD_KIND_LABEL = {"accident": "accident", "obstruction": "obstruction", "restriction": "restriction", "traffic_info": "traffic information"}
+
+
+@rule("R21", "Real road situations on own road marches and near sites")
+def r21(ctx: Context, fx: Effects) -> None:
+    """Trafikverket situations within 500 m of the route ahead of a moving own column (tail to 80 km beyond the lead):
+    accidents and obstructions -> warning with a re-route proposal; restrictions -> advisory (warning when Trafikverket grades
+    the impact high); traffic information -> info. A situation that starts after the column's tail has passed is ignored; one
+    that ends before the lead arrives is info ("expected clear"). Accidents and obstructions within 5 km of an own site are
+    info context (advisory at high impact). Real public data: the alert quotes Trafikverket, it does not assess the road."""
+    now = parse_iso(ctx.now_iso) or datetime.now(timezone.utc)
+    situations = [i for i in ctx.inputs if i.channel == "road_situation" and i.position]
+    if not situations:
+        return
+    per_col: dict[str, list[tuple[InputReport, str, float, float, str]]] = {}
+    for i in situations:
+        p = (i.position.longitudeDeg, i.position.latitudeDeg)  # type: ignore[union-attr]
+        kind = next((k for k in ROAD_KINDS if k in i.tags), "obstruction")
+        start, end = parse_iso(i.effectiveAt), tag_time(i, "valid_to")
+        for col in ctx.columns:
+            d, along = geo.project_on_line(p, col["ahead"])
+            if d > ROAD_ON_ROUTE_M:
+                continue
+            to_lead_m = along - col["lengthM"]
+            lead_at = now + timedelta(seconds=max(0.0, to_lead_m) / col["speedMps"])
+            tail_at = now + timedelta(seconds=along / col["speedMps"])
+            if start is not None and start > tail_at:
+                continue  # starts after the whole column has passed
+            if end is not None and end < lead_at:
+                sev, note = "info", f"expected clear at {end.strftime('%H:%M')} UTC, before the lead arrives"
+            elif kind in ("accident", "obstruction"):
+                sev, note = "warning", "blocks the march route"
+            elif kind == "restriction":
+                sev, note = ("warning" if SEVERITY_RANK[i.severity] >= 2 else "advisory"), "may restrict heavy or tracked vehicles"
+            else:
+                sev, note = "info", "traffic information on the route"
+            per_col.setdefault(col["id"], []).append((i, sev, d, to_lead_m, note))
+        site = nearest_site(ctx, p)
+        if site and site[1] <= ROAD_SITE_M and kind in ("accident", "obstruction"):
+            s, sd = site
+            sev = "advisory" if SEVERITY_RANK[i.severity] >= 2 else "info"
+            fx.attention.append(Contribution(p[0], p[1], 3_000, SEVERITY_WEIGHT[sev] * 0.4, f"{i.title} near {s.label}", i.id, "R21"))
+            alert(fx, ctx, f"al-R21-{i.id}", sev, f"{s.label}: road {ROAD_KIND_LABEL[kind]} {sd / 1000:.1f} km away",
+                  f"{i.title} ({i.id}), {sd / 1000:.1f} km from {s.label} (within {ROAD_SITE_M / 1000:.0f} km). Access and dispatch by road may be slower. {i.text}",
+                  "R21", [i.id], [s.id], ["picture.reports", layer_for(s)], p)
+    cols = {c["id"]: c for c in ctx.columns}
+    for cid, hits in sorted(per_col.items()):
+        col = cols[cid]
+        hits.sort(key=lambda h: h[3])
+        sev = max((h[1] for h in hits), key=lambda s: SEVERITY_RANK[s])
+        blocking = [h for h in hits if h[1] == "warning"]
+        lines = []
+        for i, hsev, d, to_lead, note in hits[:4]:
+            where = f"{to_lead / 1000:.0f} km ahead of the lead (~{to_lead / col['speedMps'] / 60:.0f} min)" if to_lead > 0 else "between the lead and the tail (the column is passing it)"
+            lines.append(f"{i.title} ({i.id}): {d:.0f} m from the route, {where}; {note}")
+        for i, hsev, d, to_lead, _ in hits:
+            fx.attention.append(Contribution(i.position.longitudeDeg, i.position.latitudeDeg, 5_000, SEVERITY_WEIGHT[hsev] * 0.8,  # type: ignore[union-attr]
+                                             f"{i.title} on the route of {col['label']}", cid, "R21"))
+        detail = (f"{len(hits)} Trafikverket road situation(s) within {ROAD_ON_ROUTE_M} m of the route ahead of {col['label']} "
+                  f"({len(col['entityIds'])} vehicles{': ' + ', '.join(col.get('units', [])) if len(col.get('units', [])) > 1 else ''}; "
+                  f"{col['speedMps'] * 3.6:.0f} km/h): " + "; ".join(lines) + ". ")
+        if blocking:
+            detail += ("Re-plan the march: the route planner treats live Trafikverket accidents, obstructions and restrictions as impassable "
+                       "(250 m around each) when it plans a road route.")
+        first = hits[0][0]
+        at = (first.position.longitudeDeg, first.position.latitudeDeg)  # type: ignore[union-attr]
+        a = alert(fx, ctx, f"al-R21-{cid}", sev, f"{col['label']}: road situation on the march route", detail, "R21", [h[0].id for h in hits],
+                  col["entityIds"][:20], [layer_for(ctx.entities[col["lead"]]) if col["lead"] in ctx.entities else "land.manoeuvre", "picture.reports"], at)
+        fx.traces.append({"rule": "R21", "subject": cid, "inputs": [h[0].id for h in hits], "distancesM": [round(h[2]) for h in hits],
+                          "aheadOfLeadM": [round(h[3]) for h in hits], "thresholdM": ROAD_ON_ROUTE_M, "severity": sev})
+        if not blocking:
+            continue
+        b = blocking[0]
+        eta_min = max(0.0, b[3]) / col["speedMps"] / 60
+        end = tag_time(b[0], "valid_to")
+        wait_min = (end - now).total_seconds() / 60 if end else None
+        lead = ctx.entities.get(col["lead"])
+        lead_label = lead.label if lead else col["lead"]
+        opts = [declared_option(f"opt-{col['lead']}-reroute", f"Re-route {col['label']}",
+                                f"Decide within ~{eta_min:.0f} min (time for the lead to reach {b[0].title}); the road planner avoids every live Trafikverket "
+                                "accident, obstruction and restriction. Declared planning figure 0.8.",
+                                [f"Open the route planner for {lead_label} and plan to the march objective", "Check the alternative's length and exposure",
+                                 "Commit the new route and brief the column at the next halt"], [col["lead"]], eta_min, 0.8, "low", "R21"),
+                declared_option(f"opt-{col['lead']}-hold", f"Hold {col['label']} short of the situation",
+                                (f"Trafikverket expects it to end at {end.strftime('%H:%M')} UTC (~{wait_min:.0f} min)." if wait_min is not None else
+                                 "No end time from Trafikverket: the wait is open-ended.") + " Declared planning figure " + ("0.6." if wait_min is not None else "0.35."),
+                                [f"Halt {col['label']} at a safe lay-by before {b[0].title}", "Monitor the Trafikverket situation", "Resume when cleared"],
+                                [col["lead"]], wait_min, 0.6 if wait_min is not None else 0.35, "medium", "R21")]
+        intervention(ctx, fx, f"iv-R21-{cid}", a, f"Keep {col['label']} moving around {b[0].title}", at, opts)
+
+
+FIRE_SITE_WARN_M = 3_000  # a thermal anomaly this close to an own site is a warning
+FIRE_SITE_M = 10_000  # ... this close an advisory
+FIRE_ROUTE_M = 2_000  # ... this close to the route ahead of a moving own column an advisory
+
+
+@rule("R22", "Real thermal anomalies near own sites and road marches")
+def r22(ctx: Context, fx: Effects) -> None:
+    """NASA FIRMS VIIRS heat sources within 3 km of an own site -> warning, within 10 km of an own site or 2 km of the route
+    ahead of a moving own column -> advisory. Heat seen on both day and night passes is persistent (industry, flares) and
+    drops one step. Anything further away raises no alert: it stays an input for corroborating explosion and fire reports.
+    The alert says plainly that VIIRS detects heat, not fire."""
+    for i in ctx.inputs:
+        if i.channel != "thermal_anomaly" or not i.position:
+            continue
+        p = (i.position.longitudeDeg, i.position.latitudeDeg)
+        site = nearest_site(ctx, p)
+        cols = []
+        for col in ctx.columns:
+            d, along = geo.project_on_line(p, col["ahead"])
+            if d <= FIRE_ROUTE_M:
+                cols.append((col, d, along - col["lengthM"]))
+        fired = []
+        if site and site[1] <= FIRE_SITE_WARN_M:
+            sev = "warning"
+            fired.append(f"{site[1] / 1000:.1f} km from {site[0].label} (< {FIRE_SITE_WARN_M / 1000:.0f} km: warning)")
+        elif (site and site[1] <= FIRE_SITE_M) or cols:
+            sev = "advisory"
+            if site and site[1] <= FIRE_SITE_M:
+                fired.append(f"{site[1] / 1000:.1f} km from {site[0].label} (< {FIRE_SITE_M / 1000:.0f} km: advisory)")
+        else:
+            continue
+        for col, d, to_lead in cols[:3]:
+            fired.append(f"{d / 1000:.1f} km from the route of {col['label']} (< {FIRE_ROUTE_M / 1000:.0f} km)" +
+                         (f", {to_lead / 1000:.0f} km ahead of its lead" if to_lead > 0 else ", beside the column now"))
+        persistent = "persistent" in i.tags
+        if persistent:
+            sev = {"warning": "advisory", "advisory": "info"}[sev]
+            fired.append("seen on day and night passes: persistent heat, one step lower")
+        subject_ids = ([site[0].id] if site and site[1] <= FIRE_SITE_M else []) + [e for col, _, _ in cols[:2] for e in col["entityIds"][:5]]
+        fx.attention.append(Contribution(p[0], p[1], 6_000, SEVERITY_WEIGHT[sev] * 0.9, i.title, i.id, "R22"))
+        a = alert(fx, ctx, f"al-R22-{i.id}", sev, f"{i.title} near " + (site[0].label if site and site[1] <= FIRE_SITE_M else cols[0][0]["label"]),
+                  "; ".join(fired) + f". {i.text}", "R22", [i.id], subject_ids, ["env.fires", "picture.reports"], p)
+        fx.traces.append({"rule": "R22", "subject": i.id, "siteId": site[0].id if site else None, "siteDistanceM": round(site[1]) if site else None,
+                          "columns": [c["id"] for c, _, _ in cols], "persistent": persistent, "severity": sev,
+                          "thresholdsM": [FIRE_SITE_WARN_M, FIRE_SITE_M, FIRE_ROUTE_M]})
+        if sev != "warning":
+            continue
+        opts = [make_option(ctx, k, c, d, p, "Verify with", [f"Task {c.label} to observe the heat source", "Report what burns: vegetation, building, vehicle or industry",
+                                                             "Alert the municipal rescue service if it is a fire"], ["R22"], 60, 0.75, "low", {"crewHours": 3})
+                for k, (c, d) in enumerate(candidates(ctx, ["isr", "guard", "patrol"], p, ["land", "air"], limit=2), 1)]
+        intervention(ctx, fx, f"iv-R22-{i.id}", a, f"Establish what is burning near {site[0].label}", p, opts)  # type: ignore[index]
 
 
 AIS_DARK_WINDOW = (900.0, 1500.0, 1800.0)  # scripted: the suspect tanker stops transmitting 900–1500 s into every 30 min

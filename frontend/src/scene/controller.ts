@@ -215,7 +215,8 @@ export class SceneController {
       geometry: { type: 'LineString', coordinates: p.points.map(q => [q[0], q[1]]) } })) })
     setData(m, 'prediction-rings', { type: 'FeatureCollection', features: snap.predictions.filter(p => p.uncertaintyRing).map(p => ({ type: 'Feature', properties: { id: p.entityId }, geometry: { type: 'Polygon', coordinates: [p.uncertaintyRing!] } })) })
     const rank = { info: 3, advisory: 2, warning: 1, critical: 0 }
-    setData(m, 'reports', { type: 'FeatureCollection', features: snap.inputs.filter(i => i.position && i.channel !== 'police_event').map(i => ({ type: 'Feature', properties: { id: i.id, severity: i.severity, title: i.title, rank: rank[i.severity] },
+    // police events, road situations and heat sources have their own layers (police, traffic, fires)
+    setData(m, 'reports', { type: 'FeatureCollection', features: snap.inputs.filter(i => i.position && !['police_event', 'road_situation', 'thermal_anomaly'].includes(i.channel)).map(i => ({ type: 'Feature', properties: { id: i.id, severity: i.severity, title: i.title, rank: rank[i.severity] },
       geometry: { type: 'Point', coordinates: [i.position!.longitudeDeg, i.position!.latitudeDeg] } })) })
     const w = this.session.world
     if (w) {
