@@ -20,7 +20,7 @@ VESSELS_URL = "https://meri.digitraffic.fi/api/ais/v1/vessels"
 DIGITRAFFIC_HEADERS = {"Accept-Encoding": "gzip", "Digitraffic-User": "TrossOps/1.0"}
 BBOX = (9.5, 53.8, 30.5, 66.2)  # lng min, lat min, lng max, lat max
 METADATA_TTL_S = 3600.0
-HISTORY_LEN = 30
+HISTORY_LEN = 60  # ~30 min at the 30 s TTL: long enough for loiter detection
 HISTORY_FORGET_S = 3 * 3600.0
 
 SHIP_TYPES = {30: "Fishing", 31: "Towing", 32: "Towing (large)", 33: "Dredging / underwater ops", 34: "Diving ops",

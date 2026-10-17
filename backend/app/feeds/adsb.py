@@ -35,8 +35,8 @@ OPENSKY_URL = "https://opensky-network.org/api/states/all"
 OPENSKY_BBOX = {"lamin": 54.5, "lomin": 9.5, "lamax": 69.5, "lomax": 31.0}
 OPENSKY_TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 
-TRAIL_LEN = 20
-TRAIL_MIN_GAP_S = 10.0
+TRAIL_LEN = 120  # ~30 min at >= 15 s spacing: long enough to recognise orbits
+TRAIL_MIN_GAP_S = 15.0
 TRAIL_FORGET_S = 900.0
 
 # GNSS integrity: airborne ADS-B positions with NIC < 7 (containment radius > 0.2 NM) or NACp < 8 (EPU >= 0.05 NM).

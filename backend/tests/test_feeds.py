@@ -212,13 +212,13 @@ def test_adsb_trail_ring_respects_gap(monkeypatch):
     monkeypatch.setattr(adsb.time, "time", lambda: clock["t"])
     ac = {"id": "abc123", "lng": 18.0, "lat": 59.0, "altM": 1000.0, "seenS": 0.0}
     for step in range(30):
-        clock["t"] += 5.0  # every 5 s: only every second sample is kept (>= 10 s apart)
+        clock["t"] += 5.0  # every 5 s: only samples at least TRAIL_MIN_GAP_S apart are kept
         feeds.ADSB.on_success({"items": [{**ac, "lng": 18.0 + step * 0.01}]})
     trail = feeds.ADSB.trail("ABC123")
-    assert len(trail) == 15
+    assert len(trail) == len(range(0, 150, int(adsb.TRAIL_MIN_GAP_S)))
     assert all(b["t"] - a["t"] >= adsb.TRAIL_MIN_GAP_S for a, b in zip(trail, trail[1:]))
-    for step in range(30):
-        clock["t"] += 10.0
+    for step in range(adsb.TRAIL_LEN + 10):
+        clock["t"] += adsb.TRAIL_MIN_GAP_S
         feeds.ADSB.on_success({"items": [ac]})
     assert len(feeds.ADSB.trail("abc123")) == adsb.TRAIL_LEN
 
@@ -521,3 +521,26 @@ def test_router_live_payloads(api):
     sources = api.get("/api/sources?probe=false").json()["sources"]
     by_id = {s["id"]: s for s in sources}
     assert by_id["adsb"]["status"] == "working" and by_id["smhi-obs"]["status"] == "adapter-only"
+
+
+def test_real_traffic_pattern_indicators(monkeypatch):
+    """A real vessel loitering over a cable corridor and an orbiting aircraft become neutral R19 indicators."""
+    import math
+    import time as _t
+
+    from app import feed_inputs, feeds as F
+    from app.orbat import CABLES
+    mid = CABLES[3]["coords"][2]  # a vertex of the Finland-Germany corridor, far from its landing points
+    now_ms = _t.time() * 1000
+    vessel = {"id": 230000001, "name": "TEST VESSEL", "lng": mid[0], "lat": mid[1], "speedMps": 0.4, "navStatusLabel": "at anchor", "shipTypeLabel": "cargo"}
+    hist = [{"timestampMs": now_ms - k * 60_000, "lng": mid[0], "lat": mid[1], "speedMps": 0.4} for k in range(30, -1, -1)]
+    trail = [{"t": _t.time() - 900 + k * 30, "lng": 20.0 + 0.2 * math.cos(k / 5), "lat": 57.0 + 0.1 * math.sin(k / 5), "altM": 9000} for k in range(31)]
+    monkeypatch.setattr(F.AIS, "_data", {"items": [vessel]}, raising=False)
+    monkeypatch.setattr(F.AIS, "history", lambda mmsi: hist)
+    monkeypatch.setattr(F.ADSB, "_data", {"items": [{"id": "abc123", "callsign": "TEST01", "type": "E3TF", "military": True, "onGround": False, "altM": 9000, "lng": 20.0, "lat": 57.0}]}, raising=False)
+    monkeypatch.setattr(F.ADSB, "trail", lambda h: trail)
+    monkeypatch.setattr(F.ADSB, "gnss", lambda: [])
+    ins = feed_inputs.inputs_for_engine(0)
+    titles = [i.title for i in ins]
+    assert any("TEST VESSEL slow over" in t for t in titles) and any("TEST01 flying an orbit" in t for t in titles)
+    assert all("not an assessment" in i.text for i in ins if {"cable", "orbit"} & set(i.tags))

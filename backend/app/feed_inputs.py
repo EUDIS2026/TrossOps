@@ -5,6 +5,9 @@ the caches warm; on a cold instance the engine simply sees no real inputs yet. T
 - SMHI impact-based warnings (yellow and above) → `weather_advisory` (feeds R07: air/sea readiness penalties).
 - Police events mentioning drones, sabotage, explosions or shooting → `police_event` (R16 and the deception layer).
 - ADS-B emergency squawks (7500/7600/7700) and clusters of degraded GNSS integrity → `sensor_detection`.
+- Pattern indicators on real traffic (rule R19): AIS vessels slow over an undersea cable corridor for >= 20 min, and
+  ADS-B aircraft flying orbit/racetrack patterns (the signature of ISR flights). These are neutral indicators derived
+  from public broadcasts, never assessments of the named vessel or aircraft.
 """
 from __future__ import annotations
 
@@ -12,6 +15,7 @@ import math
 from datetime import datetime, timedelta, timezone
 
 from . import feeds, geo
+from .orbat import CABLES
 from .models import GeoPosition, InputReport
 
 SEVERITY = {"yellow": "advisory", "orange": "warning", "red": "critical"}
@@ -95,5 +99,79 @@ def inputs_for_engine(t: float) -> list[InputReport]:
                                title=f"GNSS interference indicated ({len(group)} of {len(near)} aircraft degraded)",
                                text="Aircraft report reduced navigation integrity (NIC < 7 or NACp < 8) in this area. Consistent with GNSS jamming or spoofing.",
                                position=GeoPosition(longitudeDeg=lng, latitudeDeg=lat), radiusM=150_000, tags=["gnss", "ew", "real"], sourceKind="observed"))
-    _ = math, t
+    out.extend(_ais_cable_loiter(iso))
+    out.extend(_adsb_orbits(iso))
+    _ = t
+    return out
+
+
+def _dist_to_line_m(p: tuple[float, float], coords: list[list[float]]) -> float:
+    kx = 111_320 * math.cos(math.radians(p[1]))
+    best = float("inf")
+    for a, b in zip(coords, coords[1:]):
+        ax, ay, bx, by = (a[0] - p[0]) * kx, (a[1] - p[1]) * 110_540, (b[0] - p[0]) * kx, (b[1] - p[1]) * 110_540
+        dx, dy = bx - ax, by - ay
+        f = max(0.0, min(1.0, -(ax * dx + ay * dy) / ((dx * dx + dy * dy) or 1e-9)))
+        best = min(best, math.hypot(ax + f * dx, ay + f * dy))
+    return best
+
+
+def _ais_cable_loiter(iso: str) -> list[InputReport]:
+    """Real AIS: slow (< 2 kn) within 2 km of a cable corridor, away from its landing points, for at least 20 minutes."""
+    out = []
+    for v in _cached(feeds.AIS).get("items", []) or []:
+        p = (v.get("lng"), v.get("lat"))
+        if p[0] is None or (v.get("speedMps") or 0) > 1.0:
+            continue
+        for c in CABLES:
+            ends = (tuple(c["coords"][0]), tuple(c["coords"][-1]))
+            if min(geo.haversine_m(p, e) for e in ends) < 8_000 or _dist_to_line_m(p, c["coords"]) > 2_000:  # type: ignore[arg-type]
+                continue
+            hist = feeds.AIS.history(v["id"])
+            run = [h for h in hist if (h.get("speedMps") or 0) <= 1.0 and _dist_to_line_m((h["lng"], h["lat"]), c["coords"]) <= 2_000]
+            minutes = (run[-1]["timestampMs"] - run[0]["timestampMs"]) / 60_000 if len(run) >= 2 else 0
+            if minutes < 20:
+                continue
+            name = v.get("name") or f"MMSI {v['id']}"
+            status = v.get("navStatusLabel") or "status not reported"
+            out.append(InputReport(id=f"in-x-ais-{v['id']}-{c['id']}", channel="sensor_detection", authorLevel="sensor", author="AIS pattern indicator (Digitraffic, real)",
+                                   receivedAt=iso, effectiveAt=iso, severity="advisory", title=f"{name} slow over {c['label']} for {minutes:.0f} min",
+                                   text=f"Public AIS: {v.get('shipTypeLabel') or 'vessel'} at {(v.get('speedMps') or 0) * 1.944:.1f} kn, {status}, within 2 km of the corridor. "
+                                        "A pattern indicator from public broadcasts, not an assessment of the vessel.",
+                                   position=GeoPosition(longitudeDeg=p[0], latitudeDeg=p[1]), radiusM=5_000, tags=["ais", "cable", "loiter", "real"], sourceKind="observed"))
+            break
+    return out
+
+
+def _adsb_orbits(iso: str) -> list[InputReport]:
+    """Real ADS-B: >= 330 degrees of accumulated turn within a compact area over >= 8 min (orbits, racetracks)."""
+    out = []
+    for ac in _cached(feeds.ADSB).get("items", []) or []:
+        if ac.get("onGround"):
+            continue
+        tr = feeds.ADSB.trail(ac["id"])
+        if len(tr) < 12 or tr[-1]["t"] - tr[0]["t"] < 480:
+            continue
+        turn, prev = 0.0, None
+        for a, b in zip(tr, tr[1:]):
+            if geo.haversine_m((a["lng"], a["lat"]), (b["lng"], b["lat"])) < 200:
+                continue
+            brg = geo.bearing_deg((a["lng"], a["lat"]), (b["lng"], b["lat"]))
+            if prev is not None:
+                turn += abs(geo.wrap_heading_delta(prev, brg))
+            prev = brg
+        cx = sum(x["lng"] for x in tr) / len(tr)
+        cy = sum(x["lat"] for x in tr) / len(tr)
+        spread = max(geo.haversine_m((cx, cy), (x["lng"], x["lat"])) for x in tr)
+        if turn < 330 or spread > 80_000:
+            continue
+        mil = bool(ac.get("military"))
+        who = ac.get("callsign") or ac["id"].upper()
+        out.append(InputReport(id=f"in-x-orb-{ac['id']}", channel="sensor_detection", authorLevel="sensor", author="ADS-B pattern indicator (adsb.lol, real)",
+                               receivedAt=iso, effectiveAt=iso, severity="advisory" if mil else "info",
+                               title=f"{who} flying an orbit pattern ({ac.get('type') or 'aircraft'}{', military-flagged' if mil else ''})",
+                               text=f"Public ADS-B: {turn:.0f} degrees of turn within {spread / 1000:.0f} km over {(tr[-1]['t'] - tr[0]['t']) / 60:.0f} min at {ac.get('altM') or 0:.0f} m. "
+                                    "Orbits are typical of surveillance, training, survey or holding; a pattern indicator, not an assessment.",
+                               position=GeoPosition(longitudeDeg=cx, latitudeDeg=cy), radiusM=max(spread, 10_000), tags=["air", "orbit", "real"] + (["military"] if mil else []),
+                               sourceKind="observed"))
     return out

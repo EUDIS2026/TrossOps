@@ -525,6 +525,24 @@ def r18(ctx: Context, fx: Effects) -> None:
               "R18", [i.id], [e.id for e in affected][:40], ["analysis.gnss", "air.fighter", "sea.combat"], p)
 
 
+@rule("R19", "Pattern indicators on real public traffic")
+def r19(ctx: Context, fx: Effects) -> None:
+    """Real AIS loitering over cable corridors and real ADS-B orbit patterns become alerts with observation options.
+    The wording stays neutral: these are indicators from public broadcasts, not assessments of the named traffic."""
+    for i in ctx.inputs:
+        if "real" not in i.tags or not i.position or not ({"cable", "orbit"} & set(i.tags)):
+            continue
+        p = (i.position.longitudeDeg, i.position.latitudeDeg)
+        sea = "cable" in i.tags
+        fx.attention.append(Contribution(p[0], p[1], 20_000 if sea else 40_000, SEVERITY_WEIGHT[i.severity] * (1.1 if sea else 0.8), i.title, i.id, "R19"))
+        a = alert(fx, ctx, f"al-R19-{i.id}", i.severity, i.title, i.text, "R19", [i.id], [], ["live.sea", "infra.cables"] if sea else ["live.air", "live.air_mil"], p)
+        if sea:
+            opts = [make_option(ctx, k, c, d, p, "Observe with", [f"Task {c.label} to observe the vessel", "Hail on VHF 16; request intentions", "Document position against the corridor"],
+                                ["R19"], 120, 0.7, "low", {"crewHours": round(d / speed_of(c) / 3600 * 2, 1)})
+                    for k, (c, d) in enumerate(candidates(ctx, ["patrol", "sar", "surface"], p, ["sea", "air"], limit=2), 1)]
+            intervention(ctx, fx, f"iv-R19-{i.id}", a, "Establish what the vessel is doing over the corridor", p, opts)
+
+
 AIS_DARK_WINDOW = (900.0, 1500.0, 1800.0)  # scripted: the suspect tanker stops transmitting 900–1500 s into every 30 min
 
 
