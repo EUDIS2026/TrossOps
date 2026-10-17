@@ -347,7 +347,7 @@ def plan_route(body: PlanIn) -> dict:
             incidents = []
         result = planner.plan(e, (body.to[0], body.to[1]), ev.fx.predictions, restricted, warnings, incidents)
         from .feeds import MARKHOJD
-        if MARKHOJD.available():
+        if MARKHOJD.available() and e.domain != "sea":  # ground and air only: a ship route has no terrain to profile
             planner.annotate_terrain(result, MARKHOJD)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
