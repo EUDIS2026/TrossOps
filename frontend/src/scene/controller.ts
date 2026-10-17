@@ -183,6 +183,7 @@ export class SceneController {
   }
 
   private apply3d(s: AppState, cameraBusy = false) {
+    if (!cameraBusy) this.camera.interrupt() // a site orbit would fight the tilt
     this.models.enabled = s.threeD
     const pitch = this.map.getPitch()
     if (!cameraBusy && !this.map.isMoving()) {
@@ -357,6 +358,7 @@ export class SceneController {
     const w = this.session.world
     setData(this.map, 'ranges', empty())
     setData(this.map, 'trails', empty())
+    if (!sel) this.camera.interrupt() // deselecting stops a site orbit
     if (!sel || !w) return
     const rm = s.reducedMotion
     if (sel.kind === 'entity' || sel.kind === 'track') {
