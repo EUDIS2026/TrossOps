@@ -24,41 +24,48 @@ const C = {
   building: '#1c2229', label: '#c3ccd4', labelDim: '#8794a0', halo: '#0b0f13', aeroway: '#2a3037',
 }
 
-const roadWidth = (base: number): unknown => ['interpolate', ['exponential', 1.6], ['zoom'], 5, base * 0.3, 10, base * 1.1, 14, base * 3.4, 18, base * 14]
+// Draw-call budget: MapLibre issues one draw per tile per visible layer (two for an antialiased fill, two for text),
+// so the style keeps few layers. All road classes are one layer (colour/width by class, drawn in class order);
+// fills skip MapLibre's antialias outline pass because the canvas is multisampled; water edges are the water
+// fill's outline; buildings start at z14 where they read as buildings rather than texture.
+const ROAD_ORDER = ['match', ['get', 'class'], 'motorway', 5, 'trunk', 4, 'primary', 3, 'secondary', 2, 1]
+const roadWidth = (byClass: unknown): unknown => ['interpolate', ['exponential', 1.6], ['zoom'], 5, ['*', byClass, 0.3], 10, ['*', byClass, 1.1], 14, ['*', byClass, 3.4], 18, ['*', byClass, 14]]
 
 function vectorLayers(sat: boolean): LayerSpecification[] {
   const v = 'ofm'
   const roads: LayerSpecification[] = [
-    { id: 'road-minor', type: 'line', source: v, 'source-layer': 'transportation', minzoom: 11, filter: ['in', ['get', 'class'], ['literal', ['minor', 'service', 'tertiary']]],
-      paint: { 'line-color': sat ? 'rgba(255,255,255,0.18)' : C.minor, 'line-width': roadWidth(0.9) as never }, layout: { 'line-cap': 'round', 'line-join': 'round' } },
-    { id: 'road-secondary', type: 'line', source: v, 'source-layer': 'transportation', minzoom: 8, filter: ['==', ['get', 'class'], 'secondary'],
-      paint: { 'line-color': sat ? 'rgba(255,255,255,0.25)' : C.secondary, 'line-width': roadWidth(1.1) as never }, layout: { 'line-cap': 'round', 'line-join': 'round' } },
-    { id: 'road-primary', type: 'line', source: v, 'source-layer': 'transportation', minzoom: 6, filter: ['==', ['get', 'class'], 'primary'],
-      paint: { 'line-color': sat ? 'rgba(255,255,255,0.32)' : C.primary, 'line-width': roadWidth(1.3) as never }, layout: { 'line-cap': 'round', 'line-join': 'round' } },
-    { id: 'road-trunk', type: 'line', source: v, 'source-layer': 'transportation', minzoom: 5, filter: ['==', ['get', 'class'], 'trunk'],
-      paint: { 'line-color': sat ? 'rgba(255,236,200,0.38)' : C.trunk, 'line-width': roadWidth(1.5) as never }, layout: { 'line-cap': 'round', 'line-join': 'round' } },
-    { id: 'road-motorway', type: 'line', source: v, 'source-layer': 'transportation', minzoom: 4, filter: ['==', ['get', 'class'], 'motorway'],
-      paint: { 'line-color': sat ? 'rgba(255,220,160,0.45)' : C.motorway, 'line-width': roadWidth(1.8) as never }, layout: { 'line-cap': 'round', 'line-join': 'round' } },
+    // id kept from the former minor-road layer: the hillshade is inserted beneath it
+    { id: 'road-minor', type: 'line', source: v, 'source-layer': 'transportation', minzoom: 4,
+      filter: ['match', ['get', 'class'], 'motorway', true, 'trunk', ['>=', ['zoom'], 5], 'primary', ['>=', ['zoom'], 6], 'secondary', ['>=', ['zoom'], 8],
+        ['minor', 'service', 'tertiary'], ['>=', ['zoom'], 11], false] as never,
+      paint: {
+        'line-color': ['match', ['get', 'class'],
+          'motorway', sat ? 'rgba(255,220,160,0.45)' : C.motorway, 'trunk', sat ? 'rgba(255,236,200,0.38)' : C.trunk, 'primary', sat ? 'rgba(255,255,255,0.32)' : C.primary,
+          'secondary', sat ? 'rgba(255,255,255,0.25)' : C.secondary, sat ? 'rgba(255,255,255,0.18)' : C.minor],
+        'line-width': roadWidth(['match', ['get', 'class'], 'motorway', 1.8, 'trunk', 1.5, 'primary', 1.3, 'secondary', 1.1, 0.9]) as never },
+      layout: { 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ROAD_ORDER as never } },
     { id: 'rail', type: 'line', source: v, 'source-layer': 'transportation', minzoom: 9, filter: ['==', ['get', 'class'], 'rail'],
       paint: { 'line-color': sat ? 'rgba(255,255,255,0.15)' : C.rail, 'line-width': 1, 'line-dasharray': [3, 3] } },
   ]
   const base: LayerSpecification[] = sat ? [] : [
-    { id: 'landcover', type: 'fill', source: v, 'source-layer': 'landcover', paint: { 'fill-color': ['match', ['get', 'class'], 'wood', C.wood, 'grass', C.grass, 'wetland', C.wet, 'ice', C.ice, C.land], 'fill-opacity': 0.9 } },
+    { id: 'landcover', type: 'fill', source: v, 'source-layer': 'landcover', paint: { 'fill-color': ['match', ['get', 'class'], 'wood', C.wood, 'grass', C.grass, 'wetland', C.wet, 'ice', C.ice, C.land], 'fill-opacity': 0.9, 'fill-antialias': false } },
     { id: 'landuse', type: 'fill', source: v, 'source-layer': 'landuse', minzoom: 8, filter: ['in', ['get', 'class'], ['literal', ['residential', 'suburb', 'neighbourhood', 'industrial', 'commercial', 'retail', 'military']]],
-      paint: { 'fill-color': ['match', ['get', 'class'], 'industrial', C.industrial, 'military', '#1b1d22', C.urban], 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0.4, 12, 0.9] } },
-    { id: 'water', type: 'fill', source: v, 'source-layer': 'water', paint: { 'fill-color': C.water } },
-    { id: 'water-edge', type: 'line', source: v, 'source-layer': 'water', minzoom: 6, paint: { 'line-color': C.waterLine, 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.4, 12, 1.2] } },
+      paint: { 'fill-color': ['match', ['get', 'class'], 'industrial', C.industrial, 'military', '#1b1d22', C.urban], 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0.4, 12, 0.9], 'fill-antialias': false } },
+    { id: 'water', type: 'fill', source: v, 'source-layer': 'water', paint: { 'fill-color': C.water, 'fill-outline-color': C.waterLine } },
     { id: 'waterway', type: 'line', source: v, 'source-layer': 'waterway', minzoom: 8, paint: { 'line-color': C.river, 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.5, 14, 2] } },
-    { id: 'aeroway-area', type: 'fill', source: v, 'source-layer': 'aeroway', minzoom: 10, filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': C.aeroway } },
+    { id: 'aeroway-area', type: 'fill', source: v, 'source-layer': 'aeroway', minzoom: 10, filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': C.aeroway, 'fill-antialias': false } },
     { id: 'aeroway-line', type: 'line', source: v, 'source-layer': 'aeroway', minzoom: 10, filter: ['==', ['geometry-type'], 'LineString'],
       paint: { 'line-color': C.aeroway, 'line-width': ['interpolate', ['exponential', 2], ['zoom'], 10, 1, 16, 30] } },
-    { id: 'building', type: 'fill', source: v, 'source-layer': 'building', minzoom: 13, paint: { 'fill-color': C.building, 'fill-opacity': 0.9 } },
+    { id: 'building', type: 'fill', source: v, 'source-layer': 'building', minzoom: 14, paint: { 'fill-color': C.building, 'fill-opacity': 0.9, 'fill-antialias': false } },
   ]
+  const national = ['==', ['get', 'admin_level'], 2]
   const borders: LayerSpecification[] = [
-    { id: 'admin', type: 'line', source: v, 'source-layer': 'boundary', filter: ['all', ['>=', ['get', 'admin_level'], 3], ['<=', ['get', 'admin_level'], 4], ['!=', ['get', 'maritime'], 1]], minzoom: 5,
-      paint: { 'line-color': sat ? 'rgba(255,255,255,0.25)' : C.admin, 'line-width': 0.8, 'line-dasharray': [3, 2] } },
-    { id: 'border', type: 'line', source: v, 'source-layer': 'boundary', filter: ['all', ['==', ['get', 'admin_level'], 2], ['!=', ['get', 'maritime'], 1]],
-      paint: { 'line-color': sat ? 'rgba(255,255,255,0.6)' : C.border, 'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.8, 10, 2] } },
+    // national border (solid) and county lines (dashed, from z5) in one layer
+    { id: 'border', type: 'line', source: v, 'source-layer': 'boundary',
+      filter: ['all', ['!=', ['get', 'maritime'], 1], ['any', national, ['all', ['>=', ['get', 'admin_level'], 3], ['<=', ['get', 'admin_level'], 4], ['>=', ['zoom'], 5]]]] as never,
+      paint: { 'line-color': ['case', national, sat ? 'rgba(255,255,255,0.6)' : C.border, sat ? 'rgba(255,255,255,0.25)' : C.admin] as never,
+        'line-width': ['interpolate', ['linear'], ['zoom'], 3, ['case', national, 0.8, 0.8], 10, ['case', national, 2, 0.8]] as never,
+        'line-dasharray': ['case', national, ['literal', [1, 0]], ['literal', [3, 2]]] as never } },
   ]
   const labels: LayerSpecification[] = [
     { id: 'water-label', type: 'symbol', source: v, 'source-layer': 'water_name', minzoom: 4,
