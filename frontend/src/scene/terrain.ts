@@ -11,7 +11,8 @@
  *  2. MapLibre throws away the drape of every terrain tile under any tile of any source that reloads — including
  *     sources that are never draped, such as the operational labels updated a few times per second. That re-renders
  *     every drape every frame (~300 ms frames). `filterTileEvents()` lets only events from sources a visible draped
- *     layer reads (and the DEM itself) reach that invalidation. Style changes still invalidate everything.
+ *     layer reads (and the DEM itself) reach that invalidation, and rate-limits overlay updates (leader lines are
+ *     rewritten ~8 times a second at national zoom). Style changes still invalidate everything.
  *  3. Matching draped source tiles to terrain tiles allocates for every pair (`fastTerrainCoords()`).
  * The two MapLibre internals touched (`_terrainDataCallback`, `_getTerrainCoordsForRegularTile`) are guarded and
  * fall back to stock behaviour if they are missing; maplibre-gl is pinned. */
@@ -19,6 +20,7 @@ import type { Map as MlMap, MapSourceDataEvent, MapStyleDataEvent } from 'maplib
 
 const DRAPED = new Set(['background', 'fill', 'line', 'raster', 'hillshade', 'color-relief'])
 type DataEvent = MapStyleDataEvent | MapSourceDataEvent
+const DRAPE_REFRESH_MS = 750
 type Callback = ((e: DataEvent) => void) & { filtered?: true }
 interface CanonicalLike { equals(o: CanonicalLike): boolean; isChildOf(o: CanonicalLike): boolean }
 interface TileIDLike { canonical: CanonicalLike }
@@ -99,15 +101,30 @@ export class TerrainDrape {
     proto._getTerrainCoordsForRegularTile = fast
   }
 
-  /** Wrap MapLibre's terrain data handler (internal, pinned 6.14) so tile reloads of non-draped sources are ignored. */
+  /** Wrap MapLibre's terrain data handler (internal, pinned 6.14): tile reloads of sources no visible draped layer
+   * reads are dropped; reloads of draped overlay sources are coalesced so a source rewritten several times a second
+   * (declutter leader lines) re-renders the drape at most every `DRAPE_REFRESH_MS`, an isolated update after ~50 ms.
+   * Until then the drape keeps showing the previous version of that overlay. DEM and style events pass at once. */
   private filterTileEvents() {
     const m = this.map as MlMap & { _terrainDataCallback?: Callback }
     const orig = m._terrainDataCallback
     if (!orig || orig.filtered) return
     const dem = m.getTerrain()?.source
+    const pending = new Map<string, DataEvent>()
+    let timer = 0, lastFlush = 0
+    const flush = () => {
+      timer = 0; lastFlush = performance.now()
+      if (m._terrainDataCallback !== cb) { pending.clear(); return } // terrain switched off or replaced meanwhile
+      for (const e of pending.values()) orig(e)
+      pending.clear()
+      m.triggerRepaint()
+    }
     const cb: Callback = e => {
-      if (e.dataType === 'source' && (e as MapSourceDataEvent).tile && e.sourceId !== dem && !this.drapedSource((e as MapSourceDataEvent).sourceId)) return
-      orig(e)
+      const se = e as MapSourceDataEvent
+      if (e.dataType !== 'source' || !se.tile || se.sourceId === dem) { orig(e); return }
+      if (!this.drapedSource(se.sourceId)) return
+      pending.set(`${se.sourceId}/${se.tile.tileID.key}`, e)
+      if (!timer) timer = window.setTimeout(flush, Math.max(50, lastFlush + DRAPE_REFRESH_MS - performance.now()))
     }
     cb.filtered = true
     m.style.off('data', orig)
