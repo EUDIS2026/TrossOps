@@ -384,7 +384,8 @@ export class SceneController {
       const snap = s.snapshot
       const pos = sel.kind === 'input' ? snap?.inputs.find(i => i.id === sel.id)?.position : null
       const a = sel.kind === 'alert' ? snap?.alerts.find(x => x.id === sel.id)?.position : null
-      const ll = pos ? [pos.longitudeDeg, pos.latitudeDeg] : a ?? (sel.data as { lng?: number; lat?: number } | undefined)?.lng !== undefined ? [(sel.data as { lng: number }).lng, (sel.data as { lat: number }).lat] : null
+      const d = sel.data as { lng?: number; lat?: number } | undefined
+      const ll = pos ? [pos.longitudeDeg, pos.latitudeDeg] : a ?? (d?.lng !== undefined && d.lat !== undefined ? [d.lng, d.lat] : null)
       if (ll) this.camera.focusPoint(ll[0], ll[1], Math.max(this.map.getZoom(), 7.5), this.map.getPitch(), rm, 0)
     } else if (sel.kind === 'area') {
       const area = s.snapshot?.areas.find(a => a.id === sel.id)
