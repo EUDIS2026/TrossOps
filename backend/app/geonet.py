@@ -168,7 +168,7 @@ class RoadNet:
                 adj[b].append((a, ~i))  # reverse traversal encoded as ~i
         self.adj = adj
         self._grid: dict[tuple[int, int], list[int]] | None = None
-        self._vgrid: dict[tuple[int, int], list[tuple[float, float, int]]] | None = None
+        self._long_edges: list[int] | None = None  # edges longer than _SHORT_EDGE_M (nodes_within)
         self._lock = threading.Lock()
 
     # -- geometry helpers ------------------------------------------------------------
@@ -241,17 +241,12 @@ class RoadNet:
 
     def nodes_within(self, center: LngLat, radius_m: float, classes: set[str] | None = None) -> list[LngLat]:
         """Road vertices (junctions and shape points) within radius_m of center, nearest first.
-        `classes` restricts to vertices on edges of those road classes. Deterministic order."""
-        if self._vgrid is None:
-            with self._lock:
-                if self._vgrid is None:
-                    vg: dict[tuple[int, int], list[tuple[float, float, int]]] = {}
-                    c = self._CELL
-                    for i in range(len(self.ea)):
-                        cls = self.ecls[i]
-                        for x, y in self.edge_coords(i):
-                            vg.setdefault((int(x // (2 * c)), int(y // c)), []).append((x, y, cls))
-                    self._vgrid = vg
+        `classes` restricts to vertices on edges of those road classes. Deterministic order.
+
+        Only edges that can reach the disc are decoded: every vertex of edge i lies within its polyline length
+        `elen[i]` of either end node, so an edge is a candidate iff an end node is within radius + elen (+ margin)
+        of `center`. Short edges are found through the node grid, long ones from a precomputed list. (Decoding
+        the whole national graph up front cost ~1-2 s of every cold start.)"""
         want = None if classes is None else {i for i, c in enumerate(self.classes) if c in classes}
         c = self._CELL
         px, py = float(center[0]), float(center[1])
@@ -259,16 +254,54 @@ class RoadNet:
         kx = max(0.05, math.cos(math.radians(min(89.0, abs(py) + 1.0))))
         dx = int(radius_m / (2 * c * M_PER_DEG * kx)) + 1
         cx, cy = int(px // (2 * c)), int(py // c)
+        x_lo, x_hi, y_lo, y_hi = cx - dx, cx + dx, cy - dy, cy + dy
         found: dict[LngLat, float] = {}
-        for ix in range(cx - dx, cx + dx + 1):
-            for iy in range(cy - dy, cy + dy + 1):
-                for x, y, cls in self._vgrid.get((ix, iy), ()):
-                    if want is not None and cls not in want:
-                        continue
-                    d = haversine_m((px, py), (x, y))
-                    if d <= radius_m:
-                        found[(x, y)] = d
+        for i in self._edges_near(px, py, radius_m):
+            cls = self.ecls[i]
+            if want is not None and cls not in want:
+                continue
+            for x, y in self.edge_coords(i):
+                if not (x_lo <= int(x // (2 * c)) <= x_hi and y_lo <= int(y // c) <= y_hi):
+                    continue
+                d = haversine_m((px, py), (x, y))
+                if d <= radius_m:
+                    found[(x, y)] = d
         return [p for p, _d in sorted(found.items(), key=lambda kv: (kv[1], kv[0]))]
+
+    _SHORT_EDGE_M = 2_000.0
+
+    def _edges_near(self, px: float, py: float, radius_m: float) -> list[int]:
+        """Indices of edges that may have a vertex within radius_m of (px, py) (conservative superset, sorted)."""
+        if self._long_edges is None:
+            with self._lock:
+                if self._long_edges is None:
+                    self._long_edges = [i for i, ln in enumerate(self.elen) if ln > self._SHORT_EDGE_M]
+        long_edges = self._long_edges
+        x, y, ea, eb, elen = self.x, self.y, self.ea, self.eb, self.elen
+
+        def near(n: int, slack: float) -> bool:
+            return _fast_m(px, py, x[n], y[n]) * 0.99 - 100.0 <= radius_m + slack
+
+        out: set[int] = set()
+        for i in long_edges:
+            if near(ea[i], elen[i] * 1.01) or near(eb[i], elen[i] * 1.01):
+                out.add(i)
+        g = self._index()
+        c = self._CELL
+        reach = radius_m + self._SHORT_EDGE_M * 1.01 + 200.0
+        ry = int(reach / (c * M_PER_DEG)) + 1
+        kx = max(0.05, math.cos(math.radians(min(89.0, abs(py) + 1.0 + reach / M_PER_DEG))))
+        rx = int(reach / (2 * c * M_PER_DEG * kx)) + 1
+        cx, cy = int(px // (2 * c)), int(py // c)
+        adj = self.adj
+        for ix in range(cx - rx, cx + rx + 1):
+            for iy in range(cy - ry, cy + ry + 1):
+                for n in g.get((ix, iy), ()):
+                    for _v, e in adj[n]:
+                        i = e if e >= 0 else ~e
+                        if i not in out and elen[i] <= self._SHORT_EDGE_M and near(n, elen[i] * 1.01):
+                            out.add(i)
+        return sorted(out)
 
     # -- routing ----------------------------------------------------------------------
     def _astar(self, s: int, t: int, inv_speed: list[float], vmax: float, avoid: _Avoid | None):
