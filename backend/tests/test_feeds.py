@@ -395,7 +395,7 @@ def test_aisstream_adapter_only_without_key_and_message_parsing(monkeypatch):
     monkeypatch.setenv("VERCEL", "1")
     bursts = []
 
-    def fake_burst(key):
+    def fake_burst(key, seconds=aisstream.BURST_S):
         bursts.append(key)
         stream._fetched_at = stream._last_ok = time.time()
 
@@ -405,6 +405,71 @@ def test_aisstream_adapter_only_without_key_and_message_parsing(monkeypatch):
     assert st["status"] == "working" and "serverless" in st["note"] and len(st["items"]) == 1
     stream.refresh()
     assert bursts == ["k"]  # rate-limited to one burst per BURST_EVERY_S
+
+
+class FakeWebSocket:
+    """Stands in for websockets.sync.client.connect(): yields scripted messages, then times out like a quiet stream."""
+
+    def __init__(self, messages: list[dict], log: list):
+        self.messages, self.log = list(messages), log
+
+    def __call__(self, url, **kwargs):
+        self.log.append(("connect", url))
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def send(self, text):
+        self.log.append(("send", json.loads(text)))
+
+    def recv(self, timeout=None):
+        if not self.messages:
+            raise TimeoutError
+        return json.dumps(self.messages.pop(0))
+
+
+def ais_position(mmsi: int, lng: float, lat: float, when: str) -> dict:
+    return {"MessageType": "PositionReport",
+            "MetaData": {"MMSI": mmsi, "ShipName": f"SHIP{mmsi}", "latitude": lat, "longitude": lng, "time_utc": f"{when} +0000 UTC"},
+            "Message": {"PositionReport": {"Cog": 90.0, "Sog": 5.0, "TrueHeading": 90, "NavigationalStatus": 0,
+                                           "Latitude": lat, "Longitude": lng, "UserID": mmsi}}}
+
+
+def test_aisstream_serverless_bursts_merge_vessels_and_report_honestly(monkeypatch):
+    monkeypatch.setenv("AISSTREAM_API_KEY", "k")
+    monkeypatch.setenv("VERCEL", "1")
+    stream = aisstream.AisStreamFeed()
+    log: list = []
+    seconds: list = []
+    real_burst = stream._burst
+    monkeypatch.setattr(stream, "_burst", lambda key, s=aisstream.BURST_S: (seconds.append(s), real_burst(key, s)))
+    now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    earlier = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(time.time() - 120))
+    stream.ws_connect = FakeWebSocket([ais_position(1, 18.0, 59.0, now), ais_position(2, 19.0, 58.0, now)], log)
+    body = stream.get()
+    assert seconds == [aisstream.BURST_FIRST_S]  # cold instance: longer first burst
+    assert log[1][1]["APIKey"] == "k" and log[1][1]["BoundingBoxes"]
+    assert body["status"] == "working" and body["count"] == 2
+    assert "2 vessels held by this instance from 1 burst(s)" in body["note"] and "do not share" in body["note"]
+    # second burst: a new vessel plus an OUT-OF-ORDER older report for vessel 1, which must not move it back
+    stream.ws_connect = FakeWebSocket([ais_position(3, 20.0, 60.0, now), ais_position(1, 10.0, 55.0, earlier)], log)
+    body = stream.get()
+    assert seconds == [aisstream.BURST_FIRST_S]  # at most one burst per BURST_EVERY_S
+    stream._last_burst = 0.0
+    body = stream.get()
+    assert seconds == [aisstream.BURST_FIRST_S, aisstream.BURST_S]
+    by_id = {v["id"]: v for v in body["items"]}
+    assert set(by_id) == {1, 2, 3} and by_id[1]["lng"] == 18.0
+    assert "from 2 burst(s)" in body["note"]
+    # a failing burst keeps the merged vessels but downgrades to partial and says why
+    stream.ws_connect = FakeWebSocket([{"error": "Api Key Is Not Valid"}], log)
+    stream._last_burst = 0.0
+    body = stream.get()
+    assert body["status"] == "partial" and body["count"] == 3 and "Api Key Is Not Valid" in body["note"]
 
 
 # ---- SMHI ---------------------------------------------------------------------------------------------------------------------
