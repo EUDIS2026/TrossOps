@@ -2,6 +2,21 @@
 
 Status words: `pass`, `fail`, `blocked`, `not-run`. Evidence lives next to this file.
 
+## Run C — v2 on the owner's Windows machine (Edge 141 headless, hardware GPU, online), 17 October 2026
+
+| Check | Command | Result |
+|---|---|---|
+| Backend tests | `cd backend; python -m pytest -q` | **pass** — 81 passed (motion fixture, world, rules R01–R18, fusion, deception, planner, scenario, geonet, feeds offline) |
+| Frontend type check | `npm run typecheck` | **pass** |
+| Frontend unit tests | `npm test` | **pass** — 63 (motion twin vs Python fixture, entity buffer, 56 model checks) |
+| Production build | `npm run build` | **pass** — vendor chunks: maplibre 283 kB, milsymbol 197 kB, three 140 kB, h3 64 kB, app 131 kB (gzip) |
+| Browser acceptance E2E-01 … E2E-12 | `BROWSER_CHANNEL=msedge node scripts/verify-browser.mjs` | **pass** — 12/12, ledger `screens/v2/results.json` |
+| Frame rate, all layers on, 942 symbols + 1,014 real ships | probe in headless Edge | 36 fps mean, 50 ms worst frame |
+
+Steps: live picture · echelon budget and zoom-to-vehicle · vehicles on rendered roads · cinematic airbase with layout ·
+3D models · fusion/prediction/deception tabs · all analysis surfaces · route planning and execution · simulation clock ·
+injected drone swarm raises R16 · source status vocabulary · police role in Stockholm.
+
 ## Run A — restricted workspace (Linux, headless Chromium 1194 with SwiftShader software GL, 1440 × 900), 16 October 2026
 
 Network: no npm, PyPI or tile access. Frontend bundled with esbuild from the same sources; API started with `TROSSOPS_START_S=600`.

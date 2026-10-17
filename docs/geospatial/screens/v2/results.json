@@ -1,0 +1,222 @@
+{
+  "ui": "http://127.0.0.1:5173/",
+  "at": "2026-10-17T00:20:29.233Z",
+  "results": [
+    {
+      "id": "E2E-01",
+      "name": "National picture loads from the live API",
+      "status": "pass",
+      "ms": 469,
+      "detail": {
+        "entities": 1270,
+        "drawn": 74,
+        "stream": "live",
+        "kpis": 3,
+        "attribution": "© OpenStreetMap contributors · OpenMapTiles · OpenFreeMap | "
+      }
+    },
+    {
+      "id": "E2E-02",
+      "name": "Echelon aggregation stays inside the symbol budget and resolves to vehicles when zoomed",
+      "status": "pass",
+      "ms": 5434,
+      "detail": {
+        "far": {
+          "drawn": 80,
+          "aggregates": 44
+        },
+        "near": 10
+      }
+    },
+    {
+      "id": "E2E-03",
+      "name": "Ground vehicles drive on rendered roads",
+      "status": "pass",
+      "ms": 101639,
+      "detail": [
+        [
+          "coy-n1a-02",
+          1
+        ],
+        [
+          "coy-n1a-06",
+          1
+        ],
+        [
+          "sup-n-03",
+          0
+        ],
+        [
+          "pol-stockholm-01",
+          1
+        ]
+      ]
+    },
+    {
+      "id": "E2E-04",
+      "name": "Selecting an airbase flies in cinematically and loads its layout",
+      "status": "pass",
+      "ms": 16225,
+      "detail": {
+        "zoom": 14.3,
+        "pitch": 64,
+        "detail": 376,
+        "tab": 3,
+        "models": 29
+      }
+    },
+    {
+      "id": "E2E-05",
+      "name": "3D models render with attitude at the airbase",
+      "status": "pass",
+      "ms": 5284,
+      "detail": {
+        "instances": 10,
+        "buckets": [
+          "fighter",
+          "hangar",
+          "tower",
+          "radar_rotating",
+          "bunker",
+          "barracks",
+          "shelter"
+        ]
+      }
+    },
+    {
+      "id": "E2E-06",
+      "name": "Unknown track explains itself: fusion, prediction and deception tabs",
+      "status": "pass",
+      "ms": 8792,
+      "detail": {
+        "grades": 3,
+        "hyps": 2,
+        "indicators": 4,
+        "prob": "80 %"
+      }
+    },
+    {
+      "id": "E2E-07",
+      "name": "Every analysis surface computes cells with reasons",
+      "status": "pass",
+      "ms": 73280,
+      "detail": {
+        "fusion": {
+          "cells": 44,
+          "surface": "fusion",
+          "reasons": 2
+        },
+        "threat": {
+          "cells": 297,
+          "surface": "threat",
+          "reasons": 2
+        },
+        "coverage": {
+          "cells": 974,
+          "surface": "coverage",
+          "reasons": 1
+        },
+        "response": {
+          "cells": 974,
+          "surface": "response",
+          "reasons": 2
+        }
+      }
+    },
+    {
+      "id": "E2E-08",
+      "name": "Trajectory planning: pick a destination, compare options, execute",
+      "status": "pass",
+      "ms": 33089,
+      "detail": {
+        "opts": 1,
+        "plans": [
+          "fl-s-cor3"
+        ]
+      }
+    },
+    {
+      "id": "E2E-09",
+      "name": "Simulation clock runs ahead of live and returns",
+      "status": "pass",
+      "ms": 4385,
+      "detail": {
+        "advanced": 181,
+        "back": 0
+      }
+    },
+    {
+      "id": "E2E-10",
+      "name": "Injected drone swarm raises a counter-UAS alert",
+      "status": "pass",
+      "ms": 7256,
+      "detail": [
+        "al-R16-airbase-norr",
+        "al-R16-airbase-syd",
+        "al-R16-comms-mitt"
+      ]
+    },
+    {
+      "id": "E2E-11",
+      "name": "Real public sources report honest status",
+      "status": "pass",
+      "ms": 421,
+      "detail": [
+        [
+          "adsb",
+          "working"
+        ],
+        [
+          "ais-digitraffic",
+          "adapter-only"
+        ],
+        [
+          "aisstream",
+          "adapter-only"
+        ],
+        [
+          "smhi-obs",
+          "working"
+        ],
+        [
+          "smhi-warnings",
+          "adapter-only"
+        ],
+        [
+          "open-meteo",
+          "adapter-only"
+        ],
+        [
+          "rainviewer",
+          "adapter-only"
+        ],
+        [
+          "polisen",
+          "adapter-only"
+        ],
+        [
+          "krisinformation",
+          "adapter-only"
+        ],
+        [
+          "swpc-kp",
+          "adapter-only"
+        ],
+        [
+          "trafikverket",
+          "adapter-only"
+        ]
+      ]
+    },
+    {
+      "id": "E2E-12",
+      "name": "Police role shows patrol cars on Stockholm streets",
+      "status": "pass",
+      "ms": 8663,
+      "detail": {
+        "n": 24
+      }
+    }
+  ],
+  "pageErrors": []
+}

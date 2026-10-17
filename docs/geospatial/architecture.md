@@ -1,50 +1,53 @@
-# Architecture
+# Architecture (v2)
 
 ```
-inputs (14 channels)      synthetic world (114 entities, waypoint motion)
-        │                            │
-        └────────► rule engine (14 rules, deterministic) ◄── persisted mutations (events, commits, acks)
-                     │  attention contributions · alerts · interventions (options, outcome bands)
-                     │  predictions (dead reckoning + uncertainty) · area status · priorities · traces
-                     ▼
-         evaluation cache keyed by (scenario second, world revision)
-                     │
-   ┌─────────────────┼──────────────────────────────────────────────┐
-   │ /api/scene/snapshot?at&role   /api/scene/attention?resolution  │ FastAPI
-   │ /api/scene/entities (compact) /api/scene/tracks/{id}            │
-   │ /api/entities/{id} (detail + trace) /api/strategy/optimize      │
-   │ /api/stream  (SSE: tick 1 Hz, revision)                         │
-   └─────────────────┬──────────────────────────────────────────────┘
-                     ▼
-   Session (snapshot, detail, commands)  ──►  store (role, mode, layers, selection, time)
-   EntityBuffer (sample ring, interpolation, bounded extrapolation, stale)
-                     ▼
-   SceneController: MapLibre sources/layers · sprite layer (display rate) · model layer (3D) · camera intents
+ scripts/data ──► backend/data/geo (road graph, city streets, sea mask)          real public feeds (backend/app/feeds)
+                         │                                                    adsb.lol · OpenSky · Digitraffic AIS · SMHI
+ orbat.py (order of battle) + sitegen.py (site layouts) + motion.py           Open-Meteo · RainViewer · Polisen · Krisinfo
+                         │                                                    NOAA SWPC · (AISStream, Trafikverket: key)
+                  world.py (evaluate any t)                                          │
+                         │            scripted inputs · operator reports · injections · feed_inputs.py
+                         ▼                                    │
+              rules.py (R01–R18) ──► fusion.py · deception.py · predict.py (hypotheses) · optimize.py
+                         │
+        engine.py: catalog (motion, routes, sites)  ·  snapshot (status, alerts, interventions, predictions,
+                   fusion, deception)  ·  observed tracks  ·  planner.py (routes on roads / water / air)
+                         │
+     FastAPI: /api/world · /api/scene/snapshot · /api/stream (SSE) · /api/sites/{id}/layout · /api/plan/*
+              /api/scenario/inject · /api/live/* · /api/env/* · /api/civil/* · /api/sources
+                         │
+ Session (clock, buffer, polling) ─► WorldModel (motion.ts per frame, aggregation, budgeted cut)
+                         │
+ SceneController: MapLibre style · overlays · sprite layer (APP-6, RTC) · models3d (three.js) · H3 surfaces
+                  · site detail · real traffic · weather · cinematic camera · declutter · picking
 ```
 
-## Authority and provenance
+## Payloads
 
-- The API is the only source of truth. The browser never computes a status it then displays as fact; it interpolates positions between server samples and labels extrapolation beyond 3 s as stale.
-- Every entity carries `sourceKind` (`simulated`, `observed`, `predicted`, `planned`, `public`) and the UI renders them differently: unknown tracks are hollow orchid diamonds, predictions are dashed with an uncertainty wedge, plans are dotted, public datasets are labelled.
-- Unknown tracks never expose the simulator's route; the operator sees observed samples and the engine's prediction only.
+| Endpoint | Changes when | Size (gzip) |
+|---|---|---|
+| `/api/world` | a plan is committed or an injection spawns tracks (`catalogRevision`) | ~260 kB |
+| `/api/scene/snapshot` | every evaluation (2 s grid) | ~35 kB |
+| `/api/stream` | SSE `tick` 1 Hz (observed tracks only) and `revision` | < 1 kB per tick |
 
 ## Time
 
-- Scenario time `t` (seconds since epoch) advances at `speed` × wall clock. `at=` on any read evaluates the past; `/api/stream` ticks carry `atS`.
-- `renderTime = lastTick.atS + elapsed − 1 s buffer`; poses are interpolated between the two bracketing samples with heading wrap, dead-reckoned up to 3 s, then frozen and marked stale.
-- Replay sets a fixed `t`; the picture (entities, alerts, interventions, attention) is re-evaluated as of that second. Mutations are disabled in replay.
-
-## Views
-
-`/api/views` declares roles → modes → layers, camera presets and KPIs. Regional roles are scoped server-side. Operator layer switches override mode defaults until the mode changes. Layer attention dots come from unacknowledged alerts whose `layerIds` touch the layer.
+- Scenario time `t` advances at `speed` × wall clock from the epoch (`TROSSOPS_EPOCH=hourly` on Vercel).
+- The browser clock (`core/clock.ts`) is live or simulated at ×1–×300, into the past or up to +3 h. Motion is
+  evaluated locally at that `t`; the evaluated picture is fetched on a 10 s scenario grid. Real feeds show only live.
 
 ## Zoom semantics
 
-| Zoom | What you see | Mechanism |
+| Zoom | You see | Mechanism |
 |---|---|---|
-| < 8 | Activity clusters (count, worst condition colour), sites inside clusters, attention heatmap | MapLibre clustering, `clusterProperties` |
-| 8.3 – 13 | Heading-aware unit sprites, site glyphs, labels with collision, halos | sprite layer + symbol layers |
-| ≥ 13 (3D on) | Metre-scaled 3D models, attention columns, buildings, terrain | custom 3D layer, fill-extrusion, raster-dem |
-| any | Trails (20 min), predictions, plans, areas, incidents, intervention lines | GeoJSON sources |
+| national | brigades, air wings, flotillas, Home Guard battalions, sites, unknown tracks | budgeted cut by spread, declutter + leader lines |
+| regional | battalions and companies; convoys open into vehicles as they string out | same cut, budget grows with zoom |
+| local (≥ 11) | single platforms with heading arrows; site layouts load | instanced sprites; `/api/sites/{id}/layout` |
+| street (3D) | procedural 3D models with attitude, shelters, hangars, fuel tanks by fill level | three.js custom layer, fill-extrusion |
 
-Attention resolution follows zoom: national 0.5°, regional 0.15°, local 0.04° cells; cells are clickable and explain their score.
+Analysis surfaces (H3) are national and regional tools and fade out by zoom 11.
+
+## Provenance
+
+Every entity and input carries `sourceKind`. Unknown tracks never expose their simulated route. Real feeds are marked
+`real` in the layer tree and in the inspector; synthetic content is stated in the data notice and in Sources.

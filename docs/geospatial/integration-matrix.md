@@ -4,21 +4,31 @@ Status vocabulary: `working` (tested end to end), `partial`, `simulated` (intern
 
 | Capability | Status | Evidence / next step |
 |---|---|---|
-| Synthetic national world (114 entities, nine kinds, motion model) | simulated | `backend/tests/test_world.py`; every entity carries `sourceKind` |
-| Input channels (14) with scripted live timeline and operator submission | working (simulated content) | `test_inputs.py`, E2E-06 |
-| Rule engine: attention, alerts, interventions, outcome bands, area coverage, priorities, monitoring | working | `test_rules.py`, `docs/geospatial/rules.md` |
-| Trajectory prediction with uncertainty, intercept geometry | working (declared model) | `predict.py`, E2E-02 |
-| Strategy optimiser (Hungarian) with alternatives | working | `test_engine_api.py::test_optimiser_never_double_books`, E2E-07 |
-| Revision-checked commands, SQLite persistence, replay | working | `test_engine_api.py`, E2E-08 |
-| SSE live stream with reconnect | working | `api.ts`, E2E-01 (status chip `Live`) |
-| Role → mode → layer views, server-side regional scope | working | `views.py`, E2E-10 |
-| Layer attention dots | working | `layerAttention` in snapshot, rail |
-| Clusters by level → sprites → 3D models | working | E2E-04, E2E-05 |
-| Attention heatmap (2D) and columns (3D), clickable cells | working | E2E-09 |
-| Dark basemap (OpenFreeMap), terrain (Mapterhorn), 3D buildings | working online; verified on the owner's machine (verification.md) | public services, no SLA |
-| Imagery (EOX Sentinel-2 cloudless) | working online, non-commercial licence | attribution shown |
-| Offline geography | working | E2E runs in the restricted workspace |
-| SMHI forecasts | adapter-only until a live call succeeds on a networked host; `unavailable` otherwise | `weather.py`; never feeds rules as observations |
-| Cesium immersive mode | planned (seam: `SceneSelection` in store, `CustomLayerInterface` already carries entity poses) | ADR-001 |
-| Real telemetry, ERP, OGC feeds, NATS/SpacetimeDB | planned | contracts in `models.py`; adapters must declare `sourceKind` and status |
-| AI layers (summaries, triage) | planned by design, excluded from the demo path | every rule output is traceable without them |
+| Synthetic order of battle (~1,000 platforms, 262 formations) | simulated | `orbat.py`, `test_world.py` |
+| Road / street / sea routing (OSM-derived, ODbL) | working | `geonet.py`, `test_geonet.py`, E2E-03 |
+| Motion model with TS twin | working | `test_motion.py` + `motion.test.ts` (shared fixture) |
+| Site layouts (airbase, naval base, garrison, depot, radar) | simulated | `sitegen.py`, E2E-04/05 |
+| Rule engine R01–R18 | working | `test_rules.py`, `test_scenario.py` |
+| Source fusion (Admiralty grading) | working | `fusion.py`, E2E-06 |
+| Deception indicators | working (declared weights) | `deception.py`, E2E-06 |
+| Multi-hypothesis prediction | working (declared models) | `predict.py`, E2E-06 |
+| Trajectory planner + execution | working | `planner.py`, `test_engine_api.py`, E2E-08 |
+| Scenario injection (6 presets) | working (simulated content) | `scenario.py`, E2E-10 |
+| H3 analysis surfaces (6) | working | `scene/analysis.ts`, E2E-07 |
+| NATO APP-6 symbology | working | milsymbol 3.0.4 |
+| 3D procedural models (53) | working | `scene/three`, `models.test.ts`, E2E-05 |
+| ADS-B aircraft — adsb.lol (ODbL) | working | rate-limited ~1 req/10 s; OpenSky fallback |
+| GNSS integrity from ADS-B | working | NIC/NACp; sparse at night |
+| AIS — Digitraffic (CC BY 4.0) | working | coverage: northern Baltic and Bothnia only |
+| AIS — AISStream | adapter-only | set `AISSTREAM_API_KEY` (free) for the whole Swedish coast |
+| SMHI observations and warnings (CC BY 4.0) | working | warnings feed rule R07 |
+| Open-Meteo grid (CC BY 4.0, non-commercial) | working | 288 points hourly, inside free quota |
+| RainViewer radar | working | max zoom 7 on the free tier |
+| Polisen events | working | county-level positions; drone keywords feed R16 / deception |
+| Krisinformation | working | |
+| NOAA SWPC Kp | working | |
+| Trafikverket road situations | adapter-only | set `TRAFIKVERKET_API_KEY` (free) |
+| OpenSky OAuth | adapter-only | `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` |
+| Imagery (EOX Sentinel-2) | working | 10 m, non-commercial; Lantmäteriet orthophoto planned (key) |
+| Real military sites and identities | not in scope | AGENTS.md: synthetic only |
+| AI layers | planned by design | excluded from the demo path |
