@@ -3,14 +3,14 @@ import { useEffect, useState } from 'react'
 import { actions, EMPTY, store, useApp, type InspectorTab } from '../core/store'
 import type { WNode } from '../core/world'
 import { AlertRow, InputRow } from './Dock'
-import { ago, Bar, channelLabel, Fact, fmtTime, kindLabel, NatoGlyph, pct, plainWord, Ring, selectionLabel, siteKindLabel, useRuntime } from './context'
+import { ago, Bar, channelLabel, Fact, fmtTime, kindLabel, NatoGlyph, onTabKeys, pct, plainWord, Ring, selectionLabel, siteKindLabel, useRuntime } from './context'
 import { Icon } from './icons'
 import type { SelectionKind } from '../core/store'
 
 function Tabs({ tabs }: { tabs: [InspectorTab, string, (number | string)?][] }) {
   const tab = useApp(s => s.tab)
   const active = tabs.some(t => t[0] === tab) ? tab : tabs[0][0]
-  return <div className="tabs" role="tablist" aria-label="Details">{tabs.map(([id, label, badge]) => <button key={id} role="tab" aria-selected={active === id} onClick={() => actions.setTab(id)}>{label}{badge !== undefined && badge !== 0 && <i>{badge}</i>}</button>)}</div>
+  return <div className="tabs" role="tablist" aria-label="Details" onKeyDown={onTabKeys}>{tabs.map(([id, label, badge]) => <button key={id} role="tab" aria-selected={active === id} tabIndex={active === id ? 0 : -1} onClick={() => actions.setTab(id)}>{label}{badge !== undefined && badge !== 0 && <i>{badge}</i>}</button>)}</div>
 }
 
 /** A reference to a unit, site, track or area: shows its name (id on hover) and selects it. */
@@ -391,7 +391,7 @@ export function Inspector() {
       {sel.kind === 'police' && <PoliceDetail id={sel.id} />}</>
   }
   const kicker = selectionLabel[sel.kind] ?? sel.kind
-  return <aside className="inspector" aria-label={`${kicker} details`}>
+  return <aside className="inspector" role="region" aria-label={`${kicker} details`}>
     <div className="panel-head"><span className="kicker">{kicker}</span><button className="icon-button" title="Close (Esc)" aria-label="Close details" onClick={() => actions.deselect()}><Icon.close /></button></div>
     <div className="panel-body">{body}</div>
   </aside>

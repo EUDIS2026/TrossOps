@@ -32,7 +32,7 @@ export function ToolsDockButton() {
   const readout = useTools(s => s.readout)
   const I = tool ? ToolIcon[tool] : ToolIcon.tools
   return <div className="tools-anchor">
-    <button className="dock-btn" aria-pressed={!!tool || menu} aria-haspopup="menu" aria-expanded={menu} title="Map tools (T)" onClick={() => toolActions.toggleMenu()}>
+    <button className="dock-btn" aria-pressed={!!tool || menu} aria-haspopup="menu" aria-expanded={menu} aria-label="Map tools" aria-keyshortcuts="T" title="Map tools (T)" onClick={() => toolActions.toggleMenu()}>
       <I />{readout && <span className="dot info" />}</button>
     {menu && <div className="tools-menu" role="menu" aria-label="Map tools">
       {TOOLS.map(t => { const TI = ToolIcon[t.id]; return <button key={t.id} role="menuitemradio" aria-checked={tool === t.id} className="tools-item" title={`${t.hint} (${t.key})`} onClick={() => toolActions.setTool(t.id)}>

@@ -62,3 +62,22 @@
 .tool-readout .mono-coord { font-family: var(--mono); font-size: 11px; }
 .tool-readout b { color: var(--text); font-family: var(--mono); font-size: 12px; min-width: 52px; }
 .tool-readout small { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; }
+
+/* focus and responsive */
+.tools-menu { width: min(300px, calc(100vw - var(--dock) - 24px)); }
+.tools-menu :focus-visible { outline-offset: -2px; }
+.tool-field span:focus-within { box-shadow: 0 0 0 1px var(--accent); }
+@media (max-width: 1024px), (pointer: coarse) {
+  .tools-item { min-height: 44px; }
+  .tool-field input { padding: 10px 0; }
+  .tool-readout { height: 40px; }
+}
+/* tablet portrait and narrower: panels overlay the map, so the card and readout stay by the dock */
+@media (max-width: 900px) {
+  .tool-card, .with-drawer .tool-card { top: calc(var(--top) + 64px); left: calc(var(--dock) + 8px); width: min(312px, calc(100vw - var(--dock) - 16px)); max-height: calc(100% - var(--top) - 170px); }
+  .tool-readout, .with-drawer .tool-readout { left: calc(var(--dock) + 8px); max-width: calc(100% - var(--dock) - 80px); }
+}
+@media (max-width: 600px) {
+  .tool-card, .with-drawer .tool-card { right: 8px; width: auto; max-height: min(52vh, calc(100% - var(--top) - 210px)); }
+  .tool-readout, .with-drawer .tool-readout { bottom: 128px; max-width: calc(100% - var(--dock) - 64px); }
+}

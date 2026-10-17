@@ -63,15 +63,30 @@ export function RouteBanner() {
   const route = useApp(s => s.route)
   const label = useRuntime()?.session.world?.get(route?.entityId ?? '')?.e.label
   if (!route?.picking) return null
-  return <div className="banner" role="status"><Icon.route width={16} height={16} /> Click the destination for <b>{label ?? route.entityId}</b><button className="mini" title="Cancel (Esc)" onClick={() => actions.cancelRoute()}>Cancel</button></div>
+  return <div className="banner" role="status" aria-live="polite"><Icon.route width={16} height={16} /> Click the destination for <b>{label ?? route.entityId}</b><button className="mini" title="Cancel (Esc)" onClick={() => actions.cancelRoute()}>Cancel</button></div>
 }
 
+/** Toasts and errors, plus a screen-reader announcement when new alerts arrive. The live regions are always in
+ * the DOM (only their content changes) so assistive technology announces every update. */
 export function Toasts() {
   const error = useApp(s => s.error)
   const toast = useApp(s => s.toast)
+  const alerts = useApp(s => s.snapshot?.alerts)
+  const seen = useRef<Set<string> | null>(null)
+  const [news, setNews] = useState('')
+  useEffect(() => {
+    if (!alerts) return
+    if (!seen.current) { seen.current = new Set(alerts.map(a => a.id)); return } // the first picture is not news
+    const fresh = alerts.filter(a => !a.acknowledged && !seen.current!.has(a.id))
+    for (const a of alerts) seen.current.add(a.id)
+    if (!fresh.length) return
+    const crit = fresh.filter(a => a.severity === 'critical').length
+    setNews(`${fresh.length} new alert${fresh.length === 1 ? '' : 's'}${crit ? `, ${crit} critical` : ''}: ${fresh.slice(0, 3).map(a => a.title).join('; ')}${fresh.length > 3 ? '; and more in Alerts & reports' : ''}`)
+  }, [alerts])
   return <>
-    {toast && <div className="toast ok" role="status">{toast}</div>}
-    {error && <div className="toast" role="alert"><span>{error}</span><button className="mini" onClick={() => actions.setError(null)}>Dismiss</button></div>}
+    <div role="status" aria-live="polite">{toast && <div className="toast ok">{toast}</div>}</div>
+    <div role="alert">{error && <div className="toast"><span>{error}</span><button className="mini" onClick={() => actions.setError(null)}>Dismiss</button></div>}</div>
+    <div className="sr-only" role="status" aria-live="polite">{news}</div>
   </>
 }
 
