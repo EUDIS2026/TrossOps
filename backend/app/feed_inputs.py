@@ -22,6 +22,17 @@ SEVERITY = {"yellow": "advisory", "orange": "warning", "red": "critical"}
 POLICE_KEYWORDS = {"drone", "drönare", "sabotage", "explosion", "skottlossning", "sprängning"}
 
 
+def _when(s) -> datetime | None:
+    """Aware datetime from an ISO string with 'Z' or an offset (naive = UTC); None when missing or unparsable."""
+    if not isinstance(s, str) or not s:
+        return None
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00").replace(" ", "T", 1))
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
 def _cached(feed) -> dict:
     return getattr(feed, "_data", None) or {}
 
@@ -54,15 +65,20 @@ def inputs_for_engine(t: float) -> list[InputReport]:
         c = _ring_center(w.get("geometry"))
         if not sev or not c:
             continue
+        valid_to = _when(w.get("validTo"))
+        if valid_to is not None and valid_to < now:
+            continue  # expired warning (validTo null = until further notice); future ones stay as forecasts (R07 shows, does not penalise)
         (lng, lat), r = c
         out.append(InputReport(id=f"in-x-smhi-{w['id']}", channel="weather_advisory", authorLevel="civil_authority", author="SMHI (real warning)", receivedAt=w.get("published") or iso,
                                effectiveAt=w.get("validFrom") or iso, severity=sev, title=f"{(w.get('level') or '').title()} warning: {w.get('event') or w.get('headline')} — {w.get('areaName')}",  # type: ignore[arg-type]
                                text=(w.get("description") or w.get("headline") or "")[:600], position=GeoPosition(longitudeDeg=lng, latitudeDeg=lat), radiusM=r,
                                region=None, tags=["weather", "smhi", "real"], sourceKind="public"))
-    cutoff = (now - timedelta(hours=6)).isoformat()
+    cutoff = now - timedelta(hours=6)
     for ev in _cached(feeds.POLISEN).get("items", []) or []:
         kws = set(ev.get("keywords") or [])
-        if not kws & POLICE_KEYWORDS or ev.get("lng") is None or (ev.get("datetime") or "") < cutoff:
+        when = _when(ev.get("datetime"))
+        # Compare instants, not strings: police times carry +01:00/+02:00 offsets, the cutoff is UTC.
+        if not kws & POLICE_KEYWORDS or ev.get("lng") is None or when is None or when < cutoff:
             continue
         tags = ["police", "real"] + (["drone"] if kws & {"drone", "drönare"} else []) + sorted(kws)
         out.append(InputReport(id=f"in-x-pol-{ev['id']}", channel="police_event", authorLevel="civil_authority", author="Polisen (real event)", receivedAt=ev.get("datetime") or iso,
