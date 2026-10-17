@@ -30,6 +30,7 @@ Status vocabulary: `working` (tested end to end), `partial`, `simulated` (intern
 | Trafikverket road situations | working (keyed) | accidents, obstructions, restrictions; land route planning avoids them |
 | Active fires — NASA FIRMS (VIIRS) | working (keyed) | `FIRMS_MAP_KEY`; 24 h thermal anomalies, Sweden + Baltic |
 | OpenSky OAuth | working (keyed) | `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET`; ADS-B fallback |
-| Imagery (EOX Sentinel-2) | working | 10 m, non-commercial; Lantmäteriet orthophoto planned (key) |
+| Imagery (EOX Sentinel-2) | working | 10 m, non-commercial; Lantmäteriet orthophoto not used (paid licence, ~2 MSEK/yr) |
+| Terrain — Lantmäteriet Markhöjd Direkt | working (keyed) | free licence; route ground profiles, air terrain clearance, line of sight (`/api/terrain/los`) |
 | Real military sites and identities | not in scope | AGENTS.md: synthetic only |
 | AI layers | planned by design | excluded from the demo path |
