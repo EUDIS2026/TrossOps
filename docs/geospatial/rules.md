@@ -1,6 +1,6 @@
 # Rule engine
 
-Deterministic, traceable, no learned model. Each rule reads the world at scenario time `t` and the inputs effective by then, and writes attention contributions, alerts, interventions, predictions and derived statuses. Every output names its rule and the input ids it was derived from; `/api/entities/{id}` returns the trace for one entity.
+Deterministic, traceable, no learned model. 19 rules (R01–R20; there is no R09), listed by `GET /api/views` → `rules`. Each rule reads the world at scenario time `t` and the inputs effective by then, and writes attention contributions, alerts, interventions, predictions and derived statuses. Every output names its rule and the input ids it was derived from; `/api/entities/{id}` returns the trace for one entity.
 
 | Rule | Fires on | Produces |
 |---|---|---|
@@ -18,6 +18,20 @@ Deterministic, traceable, no learned model. Each rule reads the world at scenari
 | R13 Mid-intervention monitoring | committed interventions | progress from committed time and ETA; re-plan alert when the assigned unit degrades, runs low on fuel or weather now covers the objective |
 | R14 Open-source reporting | `public_news` with a position | low attention, info alert with OPSEC note |
 | R15 Allied offers | `allied_liaison` tagged `offer` | adds an allied option to unknown-track interventions |
+| R16 Small UAS near protected sites | unknown tracks tagged `small_uas` near an own or civil site, or reports tagged `drone` / `small_uas` about a site (by reference, or by position for police and public reports) | attention; severity by independent corroboration (one report advisory, tracks or two channels warning, ≥ 2 tracks or tracks confirmed by a second channel critical); counter-UAS and ground-search options |
+| R17 Maritime anomaly over undersea infrastructure | unknown or suspect vessel within 3 km of a cable or pipeline that is slow (< 1.6 m/s) or AIS-dark | attention, warning (critical when dark and slow), protect-and-identify intervention |
+| R18 GNSS interference | inputs tagged `gnss` / `spoofing` with a position (injected, or real ADS-B integrity clusters) | own and civil air/sea platforms inside the radius −0.08 readiness with a note, attention, alert |
+| R20 Emergency squawks on real air traffic | real ADS-B inputs tagged `squawk` (7500 / 7600 / 7700) | attention, alert at the report's severity, corroborated by a 112 report within 50 km; search-and-rescue options for 7700 and 7500; describes the squawk, not intent |
+| R19 Pattern indicators on real traffic | real-feed inputs tagged `cable` (AIS vessel slow over a cable corridor ≥ 20 min) or `orbit` (ADS-B orbit / racetrack) | attention, alert, observation intervention; wording stays neutral (indicator, not an assessment of the named traffic) |
+
+## Real feeds as inputs
+
+`feed_inputs.py` turns cached public payloads into inputs (never waiting on the network): SMHI warnings (yellow and
+above) → `weather_advisory` (R07); police events with drone, sabotage, explosion or shooting keywords in the last 6 h →
+`police_event` (R16 by position near an own site, and deception indicators); emergency squawks 7500/7600/7700 →
+`sensor_detection` tagged `squawk` (R20); clusters of ≥ 3 aircraft with degraded GNSS integrity →
+`sensor_detection` tagged `gnss` (R18); AIS cable loitering and ADS-B orbits → R19 indicators. They carry
+`sourceKind` `public` or `observed` and are evaluated only for the present.
 
 ## Options and outcomes
 

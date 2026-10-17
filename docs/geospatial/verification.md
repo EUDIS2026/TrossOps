@@ -2,6 +2,19 @@
 
 Status words: `pass`, `fail`, `blocked`, `not-run`. Evidence lives next to this file.
 
+## Run D — contracts and broader smoke (Edge headless, hardware GPU, online, shared dev API), 17 October 2026
+
+| Check | Command | Result |
+|---|---|---|
+| Backend tests | `TROSSOPS_FEEDS=off python -m pytest -q` | **pass** — 166 passed (after syncing main), incl. `test_contracts.py` (types.ts unions, every route documented, every layer has a renderer, terrain 503/422, Sources lists every feed) |
+| Frontend type check / unit tests | `npx tsc -p tsconfig.json --noEmit` · `npx vitest run` | **pass** — 72 |
+| Browser smoke E2E-01 … E2E-16 + E2E-99 | `TROSSOPS_UI=http://127.0.0.1:5194/ BROWSER_CHANNEL=msedge VERIFY_READONLY=1 npm run verify` | **pass** — 15/15, 2 skipped (E2E-13 execute route, E2E-15 inject: they write to the backend, skipped on a shared API) |
+
+Smoke steps: live picture · every role and mode via the top bar (10 roles, 22 modes) · every Dock panel · Sources panel
+vs `/api/sources` and the status vocabulary · Inspector via search · echelon budget · vehicles on roads · airbase
+layout · 3D toggle from the dock · fusion/prediction/deception tabs · analysis surfaces · route options (API and map
+pick) · route execution · simulation clock · injected drone swarm (R16) · police role · no page or console errors.
+
 ## Run C — v2 on the owner's Windows machine (Edge 141 headless, hardware GPU, online), 17 October 2026
 
 | Check | Command | Result |

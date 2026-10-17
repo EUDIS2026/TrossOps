@@ -21,6 +21,7 @@ export interface SceneEntity {
   sourceKind: SourceKind; sourceId: string | null; observedAt: string | null; stale: boolean; visualPriority: number; worldRevision: number
   sidc: string | null; echelon: string | null; parentId: string | null; layer: string | null; platform: string | null; siteId: string | null; short: string | null
   rangeKm: number | null; tags: string[]
+  scenarioId?: string; modelVersion?: string; track?: unknown | null
 }
 
 /** Order-of-battle entry from /api/world. Formations have no motion; their position is derived from their platforms. */
@@ -82,6 +83,8 @@ export interface Snapshot {
   observed: ObservedRow[]; areas: Area[]; alerts: Alert[]; interventions: Intervention[]; predictions: PredictedPath[]; inputs: InputReport[]; events: WorldEvent[]
   kpis: Record<string, number | string | null>; layerAttention: Record<string, LayerAttention>; ruleTrace: Record<string, unknown>[]; priorities: Record<string, number>
   deception: Record<string, Deception>; fusion: Record<string, Fusion>
+  /** Column names of each `StatusRow`, in order. */
+  statusColumns?: string[]
 }
 export interface KinematicsTick { atS: number; atTime: string; worldRevision: number; catalogRevision: number; rows: ObservedRow[] }
 export interface EntityDetail {
@@ -110,11 +113,22 @@ export interface Clock { epoch: string; nowS: number; serverNow: string; speed: 
 
 // ---- real public feeds (/api/live, /api/env, /api/civil) ---------------------------------------------------------
 export type FeedStatus = 'working' | 'partial' | 'simulated' | 'adapter-only' | 'planned' | 'blocked'
-export interface SourceStatus { id: string; label: string; category: string; status: FeedStatus; lastOkAt: string | null; lastError: string | null; count: number | null; licence: string; url: string; note: string | null; stale: boolean }
+export interface SourceStatus { id: string; label: string; category: string; status: FeedStatus; lastOkAt: string | null; lastError: string | null; count: number | null; licence: string; url: string; note: string | null; stale: boolean
+  attribution?: string; ttlS?: number; latencyMs?: number | null }
 export interface LiveAircraft { id: string; callsign: string | null; registration: string | null; type: string | null; category: string | null; lng: number; lat: number; altM: number | null; altDatum: string
   onGround?: boolean; speedMps: number | null; headingDeg: number | null; verticalRateMps: number | null; squawk: string | null; emergency: string | null; military: boolean; nic: number | null; nacp: number | null; seenS: number | null; source: string }
 export interface LiveVessel { id: string | number; name: string | null; callsign: string | null; imo: number | null; shipType: number | null; shipTypeLabel: string | null; lng: number; lat: number
   speedMps: number | null; courseDeg: number | null; headingDeg: number | null; navStatus: number | null; navStatusLabel: string | null; destination: string | null; timestampMs: number | null; source: string }
+export interface FeedPayload<T> {
+  status: FeedStatus; source?: string; licence?: string; fetchedAt?: string | null; stale?: boolean; items?: T[]
+  id?: string; attribution?: string; url?: string; note?: string | null; lastError?: string | null; count?: number; [k: string]: unknown
+}
+/** /api/env/fires item (NASA FIRMS VIIRS). */
+export interface FireDetection { id: string; lng: number; lat: number; frpMw: number | null; brightnessK: number | null; confidence: string | null; acquired: string; satellite: string | null; daynight: string | null; source: string }
+/** /api/civil/traffic item (Trafikverket deviation). */
+export interface TrafficIncident { id: string | null; type: string | null; severity: string | null; severityCode: number | null; message: string | null; roadNumber: string | null; location: string | null
+  lng: number | null; lat: number | null; start: string | null; end: string | null }
+
 // ---- terrain (/api/terrain, Lantmäteriet Markhöjd Direkt; 503 while not configured) -----------------------------
 export interface TerrainElevation { lng: number; lat: number; groundM: number | null; datum: string; source: string }
 export interface TerrainProfile { distanceM: number[]; groundM: (number | null)[]; points: [number, number][]; minM: number | null; maxM: number | null; climbM: number; source: string }
@@ -122,4 +136,3 @@ export interface LineOfSight {
   visible: boolean; minClearanceM: number | null; obstruction: { lng: number; lat: number; distanceM: number; groundM: number } | null
   distanceM: number; observerM: number; targetM: number; profile: TerrainProfile & { clearanceM: (number | null)[] }; method: string
 }
-export interface FeedPayload<T> { status: FeedStatus; source?: string; licence?: string; fetchedAt?: string; stale?: boolean; items?: T[]; [k: string]: unknown }
