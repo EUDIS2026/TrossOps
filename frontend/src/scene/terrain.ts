@@ -11,12 +11,21 @@
  *  2. MapLibre throws away the drape of every terrain tile under any tile of any source that reloads — including
  *     sources that are never draped, such as the operational labels updated a few times per second. That re-renders
  *     every drape every frame (~300 ms frames). `filterTileEvents()` lets only events from sources a visible draped
- *     layer reads (and the DEM itself) reach that invalidation. Style changes still invalidate everything. */
+ *     layer reads (and the DEM itself) reach that invalidation. Style changes still invalidate everything.
+ *  3. Matching draped source tiles to terrain tiles allocates for every pair (`fastTerrainCoords()`).
+ * The two MapLibre internals touched (`_terrainDataCallback`, `_getTerrainCoordsForRegularTile`) are guarded and
+ * fall back to stock behaviour if they are missing; maplibre-gl is pinned. */
 import type { Map as MlMap, MapSourceDataEvent, MapStyleDataEvent } from 'maplibre-gl'
 
 const DRAPED = new Set(['background', 'fill', 'line', 'raster', 'hillshade', 'color-relief'])
 type DataEvent = MapStyleDataEvent | MapSourceDataEvent
 type Callback = ((e: DataEvent) => void) & { filtered?: true }
+interface CanonicalLike { equals(o: CanonicalLike): boolean; isChildOf(o: CanonicalLike): boolean }
+interface TileIDLike { canonical: CanonicalLike }
+interface TerrainTileManagerLike { _renderableTilesKeys: string[]; _tiles: Record<string, { tileID: TileIDLike } | undefined> }
+interface TerrainTileManagerProto {
+  _getTerrainCoordsForRegularTile: ((this: TerrainTileManagerLike, tileID: TileIDLike) => unknown) & { prefiltered?: true }
+}
 
 export class TerrainDrape {
   private saved: string[] | null = null
@@ -30,6 +39,7 @@ export class TerrainDrape {
     this.saved = null
     this.compact()
     this.filterTileEvents()
+    this.fastTerrainCoords()
     if (!this.hooked) { this.hooked = true; this.map.on('styledata', () => this.compact()) } // layers added later
   }
 
@@ -67,6 +77,26 @@ export class TerrainDrape {
       if (l && l.source === sourceId && DRAPED.has(l.type) && !l.isHidden(z)) return true
     }
     return false
+  }
+
+  /** MapLibre maps every tile of every draped source onto the terrain tiles each frame, cloning the tile id (string
+   * key included) and allocating a matrix for every pair before checking that the two overlap: ~1300 pairs per frame
+   * over an airbase, ~4 ms. Pre-filter to the overlapping terrain tiles, then let the original do its exact work. */
+  private fastTerrainCoords() {
+    const tm = (this.map as unknown as { terrain?: { tileManager?: object } }).terrain?.tileManager
+    const proto = tm && Object.getPrototypeOf(tm) as TerrainTileManagerProto
+    if (!proto || typeof proto._getTerrainCoordsForRegularTile !== 'function' || proto._getTerrainCoordsForRegularTile.prefiltered) return
+    const orig = proto._getTerrainCoordsForRegularTile
+    const fast: TerrainTileManagerProto['_getTerrainCoordsForRegularTile'] = function (this: TerrainTileManagerLike, tileID: TileIDLike) {
+      const all = this._renderableTilesKeys
+      const c = tileID.canonical
+      const hit: string[] = []
+      for (const key of all) { const t = this._tiles[key]?.tileID.canonical; if (t && (t.equals(c) || t.isChildOf(c) || c.isChildOf(t))) hit.push(key) }
+      this._renderableTilesKeys = hit
+      try { return orig.call(this, tileID) } finally { this._renderableTilesKeys = all }
+    }
+    fast.prefiltered = true
+    proto._getTerrainCoordsForRegularTile = fast
   }
 
   /** Wrap MapLibre's terrain data handler (internal, pinned 6.14) so tile reloads of non-draped sources are ignored. */
