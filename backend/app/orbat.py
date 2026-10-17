@@ -45,7 +45,7 @@ P: dict[str, tuple[float, float]] = {
     "vastervik": (16.63, 57.76), "soderhamn": (17.06, 61.30), "hudiksvall": (17.10, 61.73), "nynashamn": (17.95, 58.90),
     "ludvika": (15.19, 60.15), "eskilstuna": (16.51, 59.37), "motala": (15.04, 58.54), "borlange": (15.43, 60.49),
     "lidkoping": (13.16, 58.50), "kalix": (23.16, 65.85), "trelleborg": (13.16, 55.37), "simrishamn": (14.35, 55.56),
-    "hemse": (18.37, 57.24), "slite": (18.80, 57.71), "nybro": (15.91, 56.74), "solleftea": (17.27, 63.17),
+    "hemse": (18.37, 57.24), "karlshamn": (14.86, 56.17), "slite": (18.80, 57.71), "nybro": (15.91, 56.74), "solleftea": (17.27, 63.17),
     # sea waypoints (open water)
     "sea_stockholm_e": (19.40, 59.30), "sea_gotland_e": (19.60, 57.60), "sea_gotland_s": (18.30, 56.80), "sea_gotland_ne": (19.40, 58.25),
     "sea_oland_s": (16.60, 55.95), "sea_oland_e": (17.30, 56.80), "sea_bornholm_n": (14.90, 55.60), "sea_hano": (14.60, 55.75), "sea_oresund": (12.70, 55.80),
@@ -56,7 +56,7 @@ P: dict[str, tuple[float, float]] = {
 COUNTY_OF = {
     "stockholm": "01", "norrtalje": "01", "nynashamn": "01", "uppsala": "03", "enkoping": "03", "nykoping": "04", "eskilstuna": "04",
     "norrkoping": "05", "linkoping": "05", "motala": "05", "jonkoping": "06", "vaxjo": "07", "kalmar": "08", "oskarshamn": "08",
-    "vastervik": "08", "nybro": "08", "visby": "09", "hemse": "09", "slite": "09", "karlskrona": "10", "malmo": "12", "helsingborg": "12",
+    "vastervik": "08", "nybro": "08", "visby": "09", "hemse": "09", "karlshamn": "10", "slite": "09", "karlskrona": "10", "malmo": "12", "helsingborg": "12",
     "kristianstad": "12", "ystad": "12", "trelleborg": "12", "simrishamn": "12", "halmstad": "13", "goteborg": "14", "skovde": "14",
     "trollhattan": "14", "uddevalla": "14", "lidkoping": "14", "karlstad": "17", "orebro": "18", "vasteras": "19", "falun": "20",
     "mora": "20", "ludvika": "20", "borlange": "20", "gavle": "21", "soderhamn": "21", "hudiksvall": "21", "sundsvall": "22",
@@ -115,16 +115,16 @@ SITES: list[SiteDef] = [
     SiteDef("hq-joint", "Joint Operations HQ", "hq", "enkoping", (6, 3), 30, "Joint Staff", ["command", "comms_hub"], sidc="SFGPUH----H-", layer="sites.land"),
     SiteDef("airbase-norr", "Airbase Norr", "airbase", "lulea", (-9, 4), 140, "Air Wing North", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
     SiteDef("airbase-syd", "Airbase Syd", "airbase", "kristianstad", (2.7, 9.4), 10, "Air Wing South", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
-    SiteDef("airbase-vast", "Airbase Väst", "airbase", "lidkoping", (-6.1, -1.2), 50, "Air Wing West", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
+    SiteDef("airbase-vast", "Airbase Väst", "airbase", "skovde", (-12.37, 12.12), 50, "Air Wing West", ["fighter", "fuel", "maintenance"], sidc="SFGPIBA---H-", layer="sites.air"),
     SiteDef("airbase-mitt", "Airbase Mitt", "airbase", "uppsala", (-5, 6), 10, "Air Wing Centre", ["transport", "aew", "fuel"], sidc="SFGPIBA---H-", layer="sites.air"),
-    SiteDef("airbase-ost", "Heliport Öst", "airbase", "linkoping", (-14.2, 10.3), 110, "Helicopter Wing", ["helicopter", "maintenance", "fuel"], sidc="SFGPIBA---H-", layer="sites.air"),
+    SiteDef("airbase-ost", "Heliport Öst", "airbase", "linkoping", (10.12, -13.47), 200, "Helicopter Wing", ["helicopter", "maintenance", "fuel"], sidc="SFGPIBA---H-", layer="sites.air"),
     SiteDef("garrison-norr", "Garrison Norr", "garrison", "boden", (-4, 2), 90, "Brigade North", ["armour", "logistics", "medical"], sidc="SFGPIB----H-"),
     SiteDef("garrison-fjall", "Garrison Fjäll", "garrison", "arvidsjaur", (2, 1), 70, "Brigade North", ["rangers", "winter"], sidc="SFGPIB----H-"),
     SiteDef("garrison-mitt", "Garrison Mitt", "garrison", "enkoping", (-8, -4), 20, "Brigade Centre", ["mech_infantry", "logistics"], sidc="SFGPIB----H-"),
     SiteDef("garrison-syd", "Garrison Syd", "garrison", "kristianstad", (-6, 5), 160, "Brigade South", ["armour", "mech_infantry"], sidc="SFGPIB----H-"),
     SiteDef("garrison-vast", "Garrison Väst", "garrison", "skovde", (3, -2), 0, "Brigade West", ["armour", "training"], sidc="SFGPIB----H-"),
     SiteDef("garrison-gotland", "Garrison Gotland", "garrison", "visby", (4, -6), 30, "Battlegroup Gotland", ["mech_infantry", "air_defence"], sidc="SFGPIB----H-"),
-    SiteDef("navbase-syd", "Naval Base Syd", "navbase", "karlskrona", (3, -2.5), 160, "Naval Flotilla South", ["corvette", "mine_warfare", "submarine", "fuel"], sidc="SFGPIBN-----", layer="sites.sea"),
+    SiteDef("navbase-syd", "Naval Base Syd", "navbase", "karlshamn", (-1.67, -2.38), 220, "Naval Flotilla South", ["corvette", "mine_warfare", "submarine", "fuel"], sidc="SFGPIBN-----", layer="sites.sea"),
     SiteDef("navbase-ost", "Naval Base Öst", "navbase", "nynashamn", (2.26, 10.14), 90, "Naval Flotilla East", ["patrol_boat", "amphibious", "fuel"], sidc="SFGPIBN-----", layer="sites.sea"),
     SiteDef("navbase-vast", "Naval Station Väst", "navbase", "goteborg", (-11.24, 9.67), 200, "Naval Station West", ["patrol_boat", "coast_guard"], sidc="SFGPIBN-----", layer="sites.sea"),
     SiteDef("depot-mitt", "Central Depot Mitt", "depot", "orebro", (6, 4), 0, "Logistics Regiment", ["ammunition", "spares", "fuel"], sidc="SFGPIRP-----", layer="sites.logistics"),
@@ -138,7 +138,7 @@ SITES: list[SiteDef] = [
     SiteDef("radar-syd", "Sensor Site Syd", "radar", "ystad", (8, 3), 0, "Sea Surveillance", ["radar", "sea_picture"], sidc="SFGPIR------", layer="infra.sensors"),
     SiteDef("radar-vast", "Sensor Site Väst", "radar", "uddevalla", (-9, 2), 0, "Sea Surveillance", ["radar", "sea_picture"], sidc="SFGPIR------", layer="infra.sensors"),
     SiteDef("radar-ost", "Sensor Site Öst", "radar", "norrtalje", (8, -6), 0, "Air Surveillance", ["radar", "air_picture", "sea_picture"], sidc="SFGPIR------", layer="infra.sensors"),
-    SiteDef("radar-bothnia", "Sensor Site Bothnia", "radar", "harnosand", (-4.5, 8), 0, "Air Surveillance", ["radar", "air_picture"], sidc="SFGPIR------", layer="infra.sensors"),
+    SiteDef("radar-bothnia", "Sensor Site Bothnia", "radar", "harnosand", (2.6, -2.2), 0, "Air Surveillance", ["radar", "air_picture"], sidc="SFGPIR------", layer="infra.sensors"),
     SiteDef("comms-mitt", "Comms Node Mitt", "comms", "eskilstuna", (2, 6), 0, "Signals Regiment", ["comms_hub"], sidc="SFGPIUT-----", layer="infra.comms"),
     SiteDef("comms-norr", "Comms Node Norr", "comms", "sundsvall", (-3, 5), 0, "Signals Regiment", ["comms_hub"], sidc="SFGPIUT-----", layer="infra.comms"),
     SiteDef("comms-syd", "Comms Node Syd", "comms", "jonkoping", (5, -5), 0, "Signals Regiment", ["comms_hub"], sidc="SFGPIUT-----", layer="infra.comms"),
@@ -396,15 +396,16 @@ def beside(cache: "RouteCache", anchor: tuple[float, float], bearing: float, dis
             return [geo.destination(anchor, bearing, dist_m)]
         blocked = road_cells_near(anchor)
         first = None
-        for turn in (0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180):
-            q = mask.nearest_dry(geo.destination(anchor, bearing + turn, dist_m), dist_m, blocked=blocked)
-            if q is None:
-                continue
-            if outside and geo.point_in_ring(q, outside):
-                continue
-            first = first or q
-            if mask.leg_dry(anchor, q, 25.0):
-                return [q]
+        for roads in (blocked, None):  # road-free ground first; a verge beside a road if that is all there is
+            for turn in (0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180):
+                q = mask.nearest_dry(geo.destination(anchor, bearing + turn, dist_m), dist_m, blocked=roads)
+                if q is None:
+                    continue
+                if outside and geo.point_in_ring(q, outside):
+                    continue
+                first = first or q
+                if mask.leg_dry(anchor, q, 25.0):
+                    return [q]
         return [first or on_ground(cache, anchor)]
     return cache.get(RouteCache.key("beside", anchor, bearing, dist_m, bool(outside)), compute)[0]
 

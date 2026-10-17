@@ -78,15 +78,17 @@ def test_nothing_parked_on_top_of_each_other(world):
 
 def test_home_guard_guards_its_own_county_from_outside_the_fence(world):
     guards = defaultdict(set)
-    for e, p in _free_statics(world):
+    for e in world.entities.values():
         if e.base.layer != "land.homeguard" or not e.base.tags or not e.base.tags[0].startswith("Protect "):
             continue
+        p = e.motion.pos[:2]
         sid = e.base.tags[0][len("Protect "):]
         site = next(s for s in orbat.SITES if s.id == sid)
         assert orbat.COUNTY_OF[site.near] == e.base.region, (e.base.id, sid)
         lay = world.layouts[sid]
         reach = max(geo.haversine_m(lay.center, q) for q in lay.footprint)
         assert geo.haversine_m(lay.center, p) <= reach + 1000, (e.base.id, sid)
+        assert not _in_ring(p, lay.footprint), f"{e.base.id} stands inside the {sid} fence it guards"
         guards[sid].add(e.base.parentId)
     assert len(guards) >= 15
     assert {sid: cs for sid, cs in guards.items() if len(cs) > 1} == {}
