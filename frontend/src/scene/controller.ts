@@ -15,7 +15,7 @@ import * as A from './analysis'
 import { ATTRIBUTION, TERRAIN_TILEJSON, styleFor } from './basemap'
 import { CinematicCamera } from './camera'
 import { ModelLayer, modelZoomFor, type ModelInstance } from './models3d'
-import { addOverlays, circleRing, DETAIL_LAYERS, empty, nightPolygon, OVERLAY_LAYERS, setData } from './overlays'
+import { addOverlays, circleRing, DETAIL_LAYERS, empty, nightPolygon, OVERLAY_LAYERS, setData, setVisible } from './overlays'
 import { SpriteLayer } from './sprites'
 import { LeaderLayer, TextLayer } from './text'
 import { WindLayer } from './windfield'
@@ -155,7 +155,7 @@ export class SceneController {
     if (ctrl?.options) { ctrl.options.customAttribution = ATTRIBUTION[next]; ctrl._updateAttributions?.() }
   }
 
-  private vis(id: string, on: boolean) { if (this.map.getLayer(id)) this.map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none') }
+  private vis(id: string, on: boolean) { setVisible(this.map, id, on) }
 
   private applyLayers(s: AppState) {
     this.onLayers = new Set((s.views?.layers ?? []).filter(l => layerOn(s, l.id)).map(l => l.id))

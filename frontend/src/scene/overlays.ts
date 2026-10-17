@@ -46,7 +46,17 @@ export function addOverlays(m: MlMap) {
     x.beginPath(); x.moveTo(32, 56); x.lineTo(32, 14); x.stroke(); x.beginPath(); x.moveTo(32, 6); x.lineTo(22, 22); x.lineTo(42, 22); x.closePath(); x.fill()
     m.addImage('wind-arrow', x.getImageData(0, 0, 64, 64), { pixelRatio: 2, sdf: false })
   }
-  const add = (layer: LayerSpecification, before?: string) => { if (!m.getLayer(layer.id)) m.addLayer(layer, before && m.getLayer(before) ? before : undefined) }
+  for (const id of SOURCES) { layersOf.set(id, []); hasData.delete(id) }
+  const add = (layer: LayerSpecification, before?: string) => {
+    if (m.getLayer(layer.id)) return
+    const src = (layer as { source?: string }).source
+    if (src && layersOf.has(src)) { // sources start empty: hidden until they get features
+      layersOf.get(src)!.push(layer.id)
+      wanted.set(layer.id, (layer.layout as { visibility?: string } | undefined)?.visibility !== 'none')
+      layer = { ...layer, layout: { ...layer.layout, visibility: 'none' } } as LayerSpecification
+    }
+    m.addLayer(layer, before && m.getLayer(before) ? before : undefined)
+  }
   const firstLabel = m.getLayer('water-label') ? 'water-label' : undefined
   // environment under everything operational
   add({ id: 'night', type: 'fill', source: 'night', paint: { 'fill-color': '#000814', 'fill-opacity': 0.32 } }, firstLabel)
@@ -116,7 +126,38 @@ export function addOverlays(m: MlMap) {
   // unit/site/traffic labels and declutter leaders follow moving symbols every frame: GPU layers in text.ts
 }
 
-export function setData(m: MlMap, id: string, fc: GeoJSON.FeatureCollection) { (m.getSource(id) as GeoJSONSource | undefined)?.setData(fc) }
+// A visible tile-clipped layer costs MapLibre a stencil-mask pass over every tile whenever the source changes from
+// the previous layer's, even when its GeoJSON is empty. Overlay layers are therefore only visible while the
+// operator wants them AND their source has features.
+const wanted = new Map<string, boolean>() // overlay layer id → operator/mode visibility
+const layersOf = new Map<string, string[]>() // overlay source → its layer ids
+const hasData = new Set<string>()
+
+function apply(m: MlMap, layerId: string) {
+  const l = m.getLayer(layerId)
+  if (!l) return
+  const src = (l as unknown as { source?: string }).source
+  const on = (wanted.get(layerId) ?? true) && (!src || !layersOf.has(src) || hasData.has(src))
+  m.setLayoutProperty(layerId, 'visibility', on ? 'visible' : 'none')
+}
+
+/** Operator visibility for any map layer; overlay layers additionally stay hidden while their source is empty. */
+export function setVisible(m: MlMap, layerId: string, on: boolean) {
+  if (!m.getLayer(layerId)) return
+  wanted.set(layerId, on)
+  apply(m, layerId)
+}
+
+export function setData(m: MlMap, id: string, fc: GeoJSON.FeatureCollection) {
+  const src = m.getSource(id) as GeoJSONSource | undefined
+  if (!src) return
+  const has = fc.features.length > 0
+  if (!has && !hasData.has(id)) return // empty stays empty: nothing to send or re-tile
+  src.setData(fc)
+  if (has === hasData.has(id)) return
+  if (has) hasData.add(id); else hasData.delete(id)
+  for (const layerId of layersOf.get(id) ?? []) apply(m, layerId)
+}
 
 export function circleRing(lng: number, lat: number, radiusM: number, steps = 64): number[][] {
   const out: number[][] = []
