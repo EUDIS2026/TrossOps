@@ -716,11 +716,11 @@ export class SceneController {
     const w = this.session.world
     if (hit.kind === 'aircraft') {
       const a = s.live.aircraft.find(x => x.id === hit.id)
-      return { title: a?.callsign ?? hit.id, lines: [`${a?.type ?? 'aircraft'} ${a?.registration ?? ''}${a?.military ? ' · military-flagged' : ''}`, `${a?.altM != null ? `${Math.round(a.altM)} m` : '—'} · ${a?.speedMps != null ? `${Math.round(a.speedMps * 1.944)} kt` : '—'} · ${a?.squawk ?? '----'}`, 'Live ADS-B (real)'] }
+      return { title: a?.callsign ?? hit.id, lines: [`${a?.type ?? 'Aircraft'} ${a?.registration ?? ''}${a?.military ? ' · military-flagged' : ''}`, `${a?.altM != null ? `${Math.round(a.altM)} m` : '—'} · ${a?.speedMps != null ? `${Math.round(a.speedMps * 1.944)} kt` : '—'} · squawk ${a?.squawk ?? '----'}`, 'Live traffic · ADS-B · real'] }
     }
     if (hit.kind === 'vessel') {
       const v = s.live.vessels.find(x => String(x.id) === hit.id)
-      return { title: v?.name ?? `MMSI ${hit.id}`, lines: [`${v?.shipTypeLabel ?? 'vessel'} · ${v?.navStatusLabel ?? ''}`, `${v?.speedMps != null ? `${(v.speedMps * 1.944).toFixed(1)} kn` : '—'}${v?.destination ? ` → ${v.destination}` : ''}`, 'Live AIS (real)'] }
+      return { title: v?.name ?? `MMSI ${hit.id}`, lines: [`${v?.shipTypeLabel ?? 'Ship'}${v?.navStatusLabel ? ` · ${v.navStatusLabel}` : ''}`, `${v?.speedMps != null ? `${(v.speedMps * 1.944).toFixed(1)} kn` : '—'}${v?.destination ? ` → ${v.destination}` : ''}`, 'Live traffic · AIS · real'] }
     }
     const n = w?.get(hit.id)
     if (!n) return { title: hit.id, lines: [] }
@@ -729,8 +729,9 @@ export class SceneController {
       return { title: e.label, lines: [`${n.count} platforms${n.moving ? ` · ${n.moving} moving` : ''}`, `${e.echelon ?? ''} · ${e.layer ?? ''}`] }
     }
     const st = n.status
-    const lines = [e.platform ?? e.kind.replace('_', ' ')]
-    if (n.pose.speed > 0.5) lines.push(`${Math.round(n.pose.speed * 3.6)} km/h · hdg ${Math.round(n.pose.heading)}°${n.pose.alt ? ` · ${Math.round(n.pose.alt)} m` : ''}`)
+    const kind = e.kind.replace(/_/g, ' ')
+    const lines = [e.platform ?? kind.charAt(0).toUpperCase() + kind.slice(1)]
+    if (n.pose.speed > 0.5) lines.push(`${Math.round(n.pose.speed * 3.6)} km/h · heading ${Math.round(n.pose.heading)}°${n.pose.alt ? ` · ${Math.round(n.pose.alt)} m` : ''}`)
     if (st) lines.push(`${st[0]} · readiness ${st[1] != null ? Math.round(st[1] * 100) : '—'} %${st[2] != null ? ` · fuel ${Math.round(st[2])} %` : ''}`)
     if (e.affiliation === 'unknown') { const d = s.snapshot?.deception[e.id]; if (d) lines.push(`deception: ${d.band} (${Math.round(d.probability * 100)} %)`) }
     return { title: e.label, lines }
