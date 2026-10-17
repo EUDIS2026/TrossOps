@@ -36,3 +36,6 @@ playwright-report/
 .pytest_tmp/
 _logs/
 trossops.bundle
+
+# Local dev probes
+frontend/scripts/_*.mjs
