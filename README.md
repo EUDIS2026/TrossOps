@@ -50,7 +50,8 @@ All units, sites and reports are **synthetic** and labelled as such. Real public
 | RainViewer | free tier | precipitation radar |
 | Polisen, Krisinformation | public APIs | police events, crisis information |
 | NOAA SWPC | public domain | Kp index |
-| Trafikverket | free key | road situations (adapter-only without a key) |
+| Trafikverket | free key | road situations; planner avoids obstructions (adapter-only without a key) |
+| NASA FIRMS | free map key | VIIRS active fires, last 24 h (adapter-only without a key) |
 | OpenStreetMap via OpenFreeMap; Mapterhorn; EOX Sentinel-2 | ODbL; open; CC BY-NC-SA | basemap, terrain, imagery, road and sea graphs |
 
 The **Data sources** drawer shows each feed's live status (`working`, `partial`, `blocked` or `adapter-only`).
@@ -63,8 +64,8 @@ cd backend; $env:TROSSOPS_START_S = "1300"; python -m uvicorn app.main:app --hos
 cd frontend; npm install; npm run dev        # http://127.0.0.1:5173
 ```
 
-Optional keys (environment variables for the backend): `AISSTREAM_API_KEY`, `TRAFIKVERKET_API_KEY`,
-`OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET`. To work offline, set `TROSSOPS_FEEDS=off`.
+Optional keys (environment variables, or a gitignored `backend/.env`): `AISSTREAM_API_KEY`, `TRAFIKVERKET_API_KEY`,
+`FIRMS_MAP_KEY`, `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET`. To work offline, set `TROSSOPS_FEEDS=off`.
 
 Shortcuts: `/` search · `L` layers · `A` alerts · `D` decisions · `S` simulate · `R` report · `I` sources · `3` 3D ·
 `F` follow · `Space` pause/resume · `Esc` close · `Home` reset.
