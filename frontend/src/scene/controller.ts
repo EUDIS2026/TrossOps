@@ -119,6 +119,7 @@ export class SceneController {
     for (const l of [this.leaders, this.sprites, this.labels]) if (!this.map.getLayer(l.id)) this.map.addLayer(l, this.models.id)
     this.prev = {}
     this.pendingPaint = true
+    this.analysisSig = '' // a new style starts with empty sources
     this.onStore()
     if (this.session.world) this.onWorld(this.session.world)
     this.layoutsDirty = true
@@ -174,7 +175,7 @@ export class SceneController {
     this.wind.enabled = this.onLayers.has('env.wind')
     const an = analysisLayer(s)
     this.vis('analysis-fill', !!an && !s.threeD); this.vis('analysis-3d', !!an && s.threeD)
-    if (!an) { setData(this.map, 'analysis', empty()); store.set({ analysisInfo: null }) }
+    if (!an) { setData(this.map, 'analysis', empty()); this.analysisSig = ''; store.set({ analysisInfo: null }) }
     this.analysisKey = ''
     if (this.onLayers.has('env.radar')) void this.ensureRadar(); else if (this.map.getLayer('radar')) this.vis('radar', false)
     this.envAt = {}
@@ -574,6 +575,8 @@ export class SceneController {
   private updateAnalysis(s: AppState, w: WorldModel, zoom: number) {
     const an = analysisLayer(s)
     if (!an) return
+    // the hexagon layers stop at zoom 11.5 (overlays.ts maxzoom): don't recompute or re-send what cannot be seen
+    if (zoom >= 11.5) return
     const res = A.resForZoom(zoom)
     const surface = an.split('.')[1] as A.Surface
     const dynamic = surface === 'threat' || surface === 'response' || surface === 'coverage'
@@ -585,10 +588,18 @@ export class SceneController {
     const r = surface === 'fusion' ? A.fusion(this.contributions, Math.max(4, Math.min(res, 6))) : surface === 'threat' ? A.threat(w, res) : surface === 'coverage' ? A.coverage(w, Math.min(res, 5))
       : surface === 'response' ? A.response(w, Math.min(res, 4)) : surface === 'weather' ? A.weather(this.grid, Math.min(res, 4)) : A.gnss(s.live.aircraft, res)
     this.lastSurface = r
-    setData(this.map, 'analysis', A.toGeoJSON(r))
+    // dynamic surfaces are recomputed every 5 s but usually come out identical: re-sending ~MBs of GeoJSON would
+    // re-tile the source (and, with terrain, re-render the drape) for nothing
+    let sig = `${r.surface}:${r.res}:`
+    for (const c of r.cells) sig += `${c.h}=${c.color}/${c.height.toFixed(0)};`
+    if (sig !== this.analysisSig) {
+      this.analysisSig = sig
+      setData(this.map, 'analysis', A.toGeoJSON(r))
+    }
     store.set({ analysisInfo: { surface: r.surface, unit: r.unit, legend: r.legend, note: r.note, cells: r.cells.length } })
   }
   lastSurface: A.SurfaceResult | null = null
+  private analysisSig = ''
 
   private trailKey = ''
   private trailFetched = 0
