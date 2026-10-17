@@ -144,6 +144,20 @@ def terrain_elevation(at: str = Query(..., description="lng,lat")) -> dict:
     return {"lng": p[0], "lat": p[1], "groundM": z, "datum": "RH 2000", "source": feeds.MARKHOJD.attribution}
 
 
+@router.get("/terrain/profile")
+def terrain_profile(path: str = Query(..., description="lng,lat;lng,lat;... (2-100 vertices)"),
+                    samples: int = Query(200, ge=2, le=1000)) -> dict:
+    """Ground elevation sampled evenly along a polyline (measure tool, ad-hoc paths)."""
+    parts = [p for p in path.split(";") if p.strip()]
+    if not 2 <= len(parts) <= 100:
+        raise HTTPException(422, "path needs 2-100 'lng,lat' vertices separated by ';'")
+    coords = [_lnglat(p) for p in parts]
+    try:
+        return _terrain().profile(coords, samples)
+    except FeedError as exc:
+        raise HTTPException(502, str(exc)) from None
+
+
 @router.get("/terrain/los")
 def terrain_los(a: str = Query(..., description="observer lng,lat"), b: str = Query(..., description="target lng,lat"),
                 ha: float = Query(2.0, ge=0, le=20_000), hb: float = Query(2.0, ge=0, le=20_000)) -> dict:

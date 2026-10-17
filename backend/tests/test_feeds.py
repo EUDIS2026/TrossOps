@@ -656,6 +656,25 @@ def test_markhojd_line_of_sight_finds_a_ridge(monkeypatch):
     assert high["visible"] is True and high["minClearanceM"] > 0
 
 
+def test_router_terrain_endpoints_are_honest_when_not_configured(api):
+    for path in ("/api/terrain/elevation?at=18.0,59.3", "/api/terrain/los?a=18.0,59.3&b=18.1,59.3",
+                 "/api/terrain/profile?path=18.0,59.3;18.1,59.3"):
+        r = api.get(path)
+        assert r.status_code == 503 and "terrain not configured" in r.json()["detail"], path
+
+
+def test_router_terrain_profile_along_a_path(api, monkeypatch):
+    monkeypatch.setenv("LANTMATERIET_TOKEN", "tok")
+    feeds.MARKHOJD.transport = mock(markhojd_routes(lambda e, n: 50.0 + (e - 600_000) / 1000))
+    body = api.get("/api/terrain/profile", params={"path": "15.3,62.0;15.5,62.0;15.5,62.1", "samples": 50}).json()
+    assert len(body["groundM"]) == len(body["distanceM"]) == len(body["points"]) == 50
+    assert body["distanceM"][0] == 0 and body["distanceM"][-1] > 20_000 and body["minM"] < body["maxM"]
+    assert body["points"][0] == [15.3, 62.0] and body["points"][-1] == [15.5, 62.1]
+    assert api.get("/api/terrain/profile", params={"path": "15.3,62.0"}).status_code == 422
+    assert api.get("/api/terrain/profile", params={"path": "15.3,62.0;2.0,40.0"}).status_code == 422
+    assert api.get("/api/terrain/profile", params={"path": "15.3,62.0;15.4,62.0", "samples": 1}).status_code == 422
+
+
 def test_planner_terrain_annotation_flags_low_clearance():
     from app import planner
 
