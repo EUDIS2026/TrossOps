@@ -31,6 +31,7 @@ CIRCLES: tuple[tuple[float, float, int], ...] = ((56.5, 15.0, 250), (60.5, 18.5,
 CIRCLE_MAX_AGE_S = 120.0  # a circle snapshot older than this is dropped from the merged picture
 POSITION_MAX_AGE_S = 90.0  # aircraft whose last position is older than this are dropped
 OPENSKY_MIN_GAP_S = 60.0
+OPENSKY_FAIL_BACKOFF_S = 600.0
 RATE_LIMIT_COOLDOWN_S = 30.0  # after HTTP 420/429 from adsb.lol, send nothing for this long
 OPENSKY_URL = "https://opensky-network.org/api/states/all"
 OPENSKY_BBOX = {"lamin": 54.5, "lomin": 9.5, "lamax": 69.5, "lomax": 31.0}
@@ -156,6 +157,7 @@ class AdsbFeed(Feed):
         self._snapshots: dict[int, tuple[float, list[dict]]] = {}
         self._circle_errors: dict[int, str] = {}
         self._opensky_cache: tuple[float, list[dict]] | None = None
+        self._opensky_fail_until = 0.0
         self._cooldown_until = 0.0
 
     def reset(self) -> None:
@@ -163,6 +165,7 @@ class AdsbFeed(Feed):
         self._snapshots.clear()
         self._circle_errors.clear()
         self._opensky_cache = None
+        self._opensky_fail_until = 0.0
         self._cooldown_until = 0.0
         with self._trail_lock:
             self._trails.clear()
@@ -247,6 +250,8 @@ class AdsbFeed(Feed):
                 partial.append("adsb.lol unavailable; serving OpenSky fallback")
             except Exception as exc:  # noqa: BLE001
                 raise FeedError("; ".join(partial + [f"opensky: {describe(exc)}"])) from exc
+        elif len(live) < len(CIRCLES) and now < self._opensky_fail_until:
+            partial.append(f"opensky gap fill: paused {self._opensky_fail_until - now:.0f} s after a failure")
         elif len(live) < len(CIRCLES) and os.environ.get("OPENSKY_CLIENT_ID") and os.environ.get("OPENSKY_CLIENT_SECRET"):
             # keyed OpenSky fills only the circles adsb.lol could not serve (shared serverless IPs get rate-limited)
             gaps = [CIRCLES[i] for i in range(len(CIRCLES)) if i not in live]
@@ -262,6 +267,7 @@ class AdsbFeed(Feed):
                 partial = [p for p in partial if not p.startswith("adsb.lol")]  # gaps and cooldown covered
                 gap_note = f"{len(gaps)} adsb.lol circle(s) filled by OpenSky ({filled} aircraft)"
             except Exception as exc:  # noqa: BLE001
+                self._opensky_fail_until = time.time() + OPENSKY_FAIL_BACKOFF_S  # e.g. cloud IPs that OpenSky drops
                 partial.append(f"opensky gap fill: {describe(exc)}")
         items = []
         for pos_t, ac in merged.values():
