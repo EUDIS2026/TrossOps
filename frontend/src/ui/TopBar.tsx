@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { actions, currentRole, EMPTY, useApp } from '../core/store'
-import { fmtClock, fmtDuration, kindLabel, NatoGlyph, siteKindLabel, useRuntime } from './context'
+import { fmtClock, fmtDuration, kindLabel, NatoGlyph, onTabKeys, siteKindLabel, useRuntime } from './context'
 import { Icon } from './icons'
 
 const PLACES: [string, number, number][] = [['Stockholm', 18.07, 59.33], ['Göteborg', 11.97, 57.71], ['Malmö', 13.0, 55.61], ['Uppsala', 17.64, 59.86], ['Visby', 18.29, 57.64], ['Luleå', 22.15, 65.58],
@@ -48,8 +48,8 @@ function ModeTabs() {
   const role = useApp(currentRole)
   const modeId = useApp(s => s.modeId)
   if (!role) return <div className="modes" aria-hidden />
-  return <div className="modes" role="tablist" aria-label={`Map modes for ${role.label}`}>
-    {role.modes.map(m => <button key={m.id} role="tab" aria-selected={m.id === modeId} title={m.description} onClick={() => actions.setMode(m.id)}>{m.label}</button>)}
+  return <div className="modes" role="tablist" aria-label={`Map modes for ${role.label}`} onKeyDown={onTabKeys}>
+    {role.modes.map(m => <button key={m.id} role="tab" aria-selected={m.id === modeId} tabIndex={m.id === modeId ? 0 : -1} title={m.description} onClick={() => actions.setMode(m.id)}>{m.label}</button>)}
   </div>
 }
 
@@ -96,6 +96,7 @@ function Search() {
     <Icon.search width={15} height={15} />
     <input ref={input} placeholder="Search units, sites, aircraft, ships, places" value={q} aria-label="Search units, sites, aircraft, ships and places"
       role="combobox" aria-expanded={open && results.length > 0} aria-controls="search-results" aria-autocomplete="list"
+      aria-activedescendant={open && results[cursor] ? `search-opt-${cursor}` : undefined}
       onFocus={() => actions.setPanel('search', true)} onBlur={() => setTimeout(() => actions.setPanel('search', false), 150)}
       onChange={e => { setQ(e.target.value); setCursor(0) }}
       onKeyDown={e => {
@@ -107,7 +108,7 @@ function Search() {
     <kbd title="Press / to search">/</kbd>
     {open && q.trim() !== '' && results.length === 0 && <div className="search-results"><div className="quiet empty">No match for “{q.trim()}”. Try a unit designation, site, callsign, ship name or town.</div></div>}
     {open && results.length > 0 && <div className="search-results" role="listbox" id="search-results" aria-label="Search results">
-      {results.map((r, i) => <button key={`${r.kind}:${r.id}`} role="option" aria-selected={i === cursor} className="item" onMouseDown={() => pick(r)}>
+      {results.map((r, i) => <button key={`${r.kind}:${r.id}`} id={`search-opt-${i}`} role="option" aria-selected={i === cursor} tabIndex={-1} className="item" onMouseDown={() => pick(r)}>
         {r.sidc ? <NatoGlyph sidc={r.sidc} size={30} /> : <span className="glyph-ph">{r.kind === 'aircraft' ? <Icon.plane /> : r.kind === 'vessel' ? <Icon.ship /> : <Icon.map />}</span>}
         <span><strong>{r.title}</strong><small>{r.sub}</small></span>
       </button>)}
@@ -128,7 +129,7 @@ function ClockChip() {
     : stream === 'offline' ? 'Offline: lost contact with the server. Positions keep moving on the declared plans.' : 'Live: the picture is now. Click for time and scenarios (S).'
   return <button className={`status-chip ${sim ? 'sim' : ''}`} title={tip} aria-label={`${word} ${fmtClock(at)}. Time and scenarios`} aria-pressed={scenario} onClick={() => actions.togglePanel('scenario')}>
     <span className={`pip ${sim ? 'replay' : stream}`} />
-    {word}
+    <span className="word">{word}</span>
     <b>{fmtClock(at)}</b>
     {sim && <small>{clock.offsetS >= 0 ? '+' : '−'}{fmtDuration(clock.offsetS)}{clock.paused ? ' · paused' : ` · ×${clock.rate}`}</small>}
   </button>

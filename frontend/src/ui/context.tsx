@@ -8,6 +8,19 @@ export interface Runtime { session: Session; scene: SceneController }
 export const RuntimeContext = createContext<Runtime | null>(null)
 export function useRuntime(): Runtime | null { return useContext(RuntimeContext) }
 
+/** Arrow keys, Home and End move between the tabs of a tablist and select the tab (WAI-ARIA tabs pattern).
+ * Pair with a roving tabIndex (0 on the selected tab, -1 on the rest) so the tablist is one Tab stop. */
+export function onTabKeys(e: React.KeyboardEvent<HTMLElement>) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
+  const tabs = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')]
+  const i = tabs.indexOf(document.activeElement as HTMLElement)
+  if (i < 0) return
+  e.preventDefault()
+  const n = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length
+  tabs[n].focus()
+  tabs[n].click()
+}
+
 const TZ = 'Europe/Stockholm'
 export function fmtTime(iso: string | null | undefined): string {
   if (!iso) return '—'

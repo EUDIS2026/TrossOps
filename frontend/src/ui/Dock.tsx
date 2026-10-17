@@ -26,7 +26,7 @@ export function Dock() {
   const basemap = useApp(s => s.basemap)
   const critical = Object.values(attention).some(a => a.severity === 'critical')
   return <nav className="dock" aria-label="Tools">
-    {DOCK.map(d => { const I = Icon[d.icon]; return <button key={d.panel} className="dock-btn" data-panel={d.panel} aria-pressed={panels[d.panel]} aria-label={d.label} aria-keyshortcuts={d.key}
+    {DOCK.map(d => { const I = Icon[d.icon]; return <button key={d.panel} className="dock-btn" data-panel={d.panel} aria-pressed={panels[d.panel]} aria-controls={panels[d.panel] ? 'drawer' : undefined} aria-label={d.label} aria-keyshortcuts={d.key}
       data-tip={`${d.label} (${d.key})\n${d.hint}`} onClick={() => actions.togglePanel(d.panel)}>
       <I />{d.panel === 'layers' && critical && <span className="dot critical" />}</button> })}
     <ToolsDockButton />
@@ -50,8 +50,8 @@ export function Drawer() {
   }, [open])
   if (!open) return null
   const d = DOCK.find(x => x.panel === open)
-  return <aside className="drawer" aria-label={d?.label} ref={ref} tabIndex={-1}>
-    <div className="panel-head"><h2>{d?.label}</h2><button className="icon-button" title="Close (Esc)" aria-label={`Close ${d?.label}`} onClick={() => actions.setPanel(open, false)}><Icon.close /></button></div>
+  return <aside className="drawer" id="drawer" role="region" aria-labelledby="drawer-title" ref={ref} tabIndex={-1}>
+    <div className="panel-head"><h2 id="drawer-title">{d?.label}</h2><button className="icon-button" title="Close (Esc)" aria-label={`Close ${d?.label}`} onClick={() => actions.setPanel(open, false)}><Icon.close /></button></div>
     <div className="panel-body">
       {open === 'layers' && <LayersPanel />}
       {open === 'feed' && <FeedPanel />}
@@ -123,20 +123,21 @@ function LayersPanel() {
 export function AlertRow({ a }: { a: Alert }) {
   const rt = useRuntime()
   const sel = useApp(s => s.selected?.id === a.id)
-  const ack = (e: React.SyntheticEvent) => { e.stopPropagation(); e.preventDefault(); void rt?.session.ack(a.id) }
   const n = a.entityIds.length
-  return <button className={`item ${a.acknowledged ? 'ack' : ''}`} aria-selected={sel} onClick={() => actions.select('alert', a.id)}>
-    <span className={`dot ${a.severity}`} title={a.severity} />
-    <span><strong>{a.title}</strong><small>Rule {a.ruleId}{n ? ` · ${n} linked` : ''}{a.recommendedInterventionId ? ' · decision pending' : ''}{a.acknowledged ? ' · acknowledged' : ''}</small></span>
-    {!a.acknowledged && <span role="button" tabIndex={0} className="mini" title="Acknowledge: mark as seen" aria-label={`Acknowledge ${a.title}`}
-      onClick={ack} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') ack(e) }}>Ack</span>}
-  </button>
+  // Row and Ack are sibling buttons: a button may not contain another interactive control.
+  return <div className={`item-row ${a.acknowledged ? 'ack' : ''}`}>
+    <button className="item" aria-current={sel || undefined} onClick={() => actions.select('alert', a.id)}>
+      <span className={`dot ${a.severity}`} title={a.severity} />
+      <span><strong>{a.title}</strong><small><span className="sr-only">{a.severity} alert · </span>Rule {a.ruleId}{n ? ` · ${n} linked` : ''}{a.recommendedInterventionId ? ' · decision pending' : ''}{a.acknowledged ? ' · acknowledged' : ''}</small></span>
+    </button>
+    {!a.acknowledged && <button className="mini" title="Acknowledge: mark as seen" aria-label={`Acknowledge ${a.title}`} onClick={() => void rt?.session.ack(a.id)}>Ack</button>}
+  </div>
 }
 
 export function InputRow({ i }: { i: InputReport }) {
   const sel = useApp(s => s.selected?.id === i.id)
   const dec = useApp(s => s.snapshot?.deception[i.id])
-  return <button className="item" aria-selected={sel} onClick={() => actions.select('input', i.id)}>
+  return <button className="item" aria-current={sel || undefined} onClick={() => actions.select('input', i.id)}>
     <span className={`dot ${i.severity}`} />
     <span><strong>{i.title}</strong><small>{channelLabel[i.channel] ?? i.channel} · {i.author}{i.sourceKind === 'public' || i.sourceKind === 'observed' ? ' · real feed' : ''}{dec && dec.probability >= 0.5 ? ` · possible deception (${dec.band})` : ''}</small></span>
     <span className="when">{fmtTime(i.effectiveAt)}</span>
