@@ -4,9 +4,12 @@ Primary: adsb.lol (`/v2/lat/{lat}/lon/{lon}/dist/{nm}`, max 250 nm, ODbL). Swede
 overlapping 250 nm circles merged by ICAO hex.
 
 adsb.lol rate-limits per IP (measured 2026-10: a burst of ~3 requests, then roughly one request per 10 s; excess gets
-HTTP 429, or 420 when sustained). After a 420/429 the feed pauses adsb.lol requests for ~30 s, doubling (with
-jitter) while the limit persists, up to ~4 min. A cold start fetches all circles at once and every later refresh fetches only the stalest
-circle; the published picture merges the latest snapshot of each circle by absolute position time, and `seenS` is the
+HTTP 429, or 420 when sustained; re-measured 2026-10-17 from one residential IP: a 3-request burst after a 90 s rest
+passed, but one request per 10 s afterwards drew 429 on about half the requests in two of three runs, so the
+sustainable rate is nearer one per 15-20 s and shared serverless IPs fare worse). After a 420/429 the feed pauses
+adsb.lol requests for ~30 s, doubling (with jitter) while the limit persists, up to ~4 min. The edge cache in front of
+/api/live/aircraft (see routes_live) keeps the number of instances that ask at all small. A cold start fetches all
+circles at once and every later refresh fetches only the stalest circle; the published picture merges the latest snapshot of each circle by absolute position time, and `seenS` is the
 age of each position at publication. A full cycle therefore takes ~3 x TTL.
 
 Fallback when no circle snapshot is available: OpenSky Network `states/all` over a bounding box (anonymous, or OAuth2
