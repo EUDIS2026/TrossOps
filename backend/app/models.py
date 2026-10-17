@@ -2,7 +2,7 @@
 Everything here is synthetic scenario content unless `sourceKind` says otherwise."""
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -136,17 +136,18 @@ class InputReport(BaseModel):
 
 
 class InputIn(BaseModel):
+    """Posted report. Bounded: every accepted input is persisted to the mutation log and replayed."""
     channel: Channel
     authorLevel: AuthorLevel
-    author: str
-    title: str
-    text: str
+    author: str = Field(max_length=120)
+    title: str = Field(max_length=300)
+    text: str = Field(max_length=8_000)
     severity: Severity | None = None
     position: GeoPosition | None = None
-    radiusM: float | None = None
-    entityRefs: list[str] = []
-    region: str | None = None
-    tags: list[str] = []
+    radiusM: float | None = Field(default=None, ge=0, le=2_000_000, allow_inf_nan=False)
+    entityRefs: list[Annotated[str, Field(max_length=128)]] = Field(default=[], max_length=100)
+    region: str | None = Field(default=None, max_length=64)
+    tags: list[Annotated[str, Field(max_length=64)]] = Field(default=[], max_length=50)
 
 
 class AttentionCell(BaseModel):
