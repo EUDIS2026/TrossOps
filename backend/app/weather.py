@@ -2,6 +2,7 @@
 otherwise `unavailable` with the reason. Values never feed the rule engine as observations — they are forecasts."""
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime, timezone
 
@@ -75,6 +76,9 @@ class WeatherService:
         hit = self.cache.get(location)
         if hit and time.time() - hit[0] < self.ttl:
             return hit[1]
+        if os.environ.get("TROSSOPS_FEEDS", "").strip().lower() in {"off", "0", "false", "no", "disabled"}:  # same switch as app.feeds
+            return {"status": "unavailable", "source": "SMHI SNOW1G point forecast (public)", "kind": "forecast", "location": location, "label": meta["label"],
+                    "requestedPoint": meta["point"], "reason": "disabled by configuration (TROSSOPS_FEEDS=off)"}
         try:
             with httpx.Client(timeout=6.0) as client:
                 response = client.get(SMHI_URL.format(lon=meta["point"][0], lat=meta["point"][1]))

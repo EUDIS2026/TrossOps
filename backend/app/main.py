@@ -4,16 +4,20 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Annotated, Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Path as PathParam, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from . import envfile  # noqa: F401  (loads backend/.env before any feed reads its key)
-from . import planner, rules, views
+from . import httpcache, planner, rules, views
 from .engine import Engine
 from .inputs import CHANNEL_META
 from .models import CommitIn, EventIn, InputIn
@@ -40,13 +44,84 @@ def _epoch_from_env(speed: float, start_s: float):
 _speed = float(os.environ.get("TROSSOPS_CLOCK_SPEED", "1"))
 _start_s = float(os.environ.get("TROSSOPS_START_S", "0"))
 _db = Path(os.environ["TROSSOPS_DB_PATH"]) if os.environ.get("TROSSOPS_DB_PATH") else (Path("/tmp/trossops.sqlite") if os.environ.get("VERCEL") else default_db)
+_t_engine = time.perf_counter()
 engine = Engine(_db, speed=_speed, start_s=_start_s, epoch=_epoch_from_env(_speed, _start_s))
+# cold-start diagnostics (serverless): how long the world took and whether the committed route cache covered it
+BOOT = {"engineS": round(time.perf_counter() - _t_engine, 2), "routeCacheEntries": len(engine.world.orbat.cache.data),
+        "routeCacheMissed": bool(engine.world.orbat.cache.dirty), "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
 weather = WeatherService()
 
 app = FastAPI(title="TrossOps National Scene API", version=API_VERSION)
-app.add_middleware(GZipMiddleware, minimum_size=2048)
+app.add_middleware(GZipMiddleware, minimum_size=2048, compresslevel=httpcache.GZIP_LEVEL)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4173", "http://127.0.0.1:4173"],
-                   allow_methods=["GET", "POST"], allow_headers=["*"])
+                   allow_methods=["GET", "POST"], allow_headers=["Content-Type", "If-None-Match"], max_age=600)
+
+SECURITY_HEADERS = [(b"x-content-type-options", b"nosniff"), (b"referrer-policy", b"no-referrer"), (b"x-frame-options", b"DENY"),
+                    (b"cross-origin-resource-policy", b"same-site")]
+
+
+class SecurityHeaders:
+    """Pure ASGI (no BaseHTTPMiddleware: that buffers and breaks the SSE stream). Adds headers a public JSON API
+    should carry unless the handler already set them."""
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.inner(scope, receive, send)
+            return
+
+        async def send_with_headers(message) -> None:
+            if message["type"] == "http.response.start":
+                present = {k.lower() for k, _ in message.get("headers", [])}
+                message["headers"] = list(message.get("headers", [])) + [(k, v) for k, v in SECURITY_HEADERS if k not in present]
+            await send(message)
+        await self.inner(scope, receive, send_with_headers)
+
+
+app.add_middleware(SecurityHeaders)
+
+
+def _loc(err: dict) -> str:
+    return ".".join(str(p) for p in err.get("loc", ()) if p not in ("body",)) or "request"
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """422 with a readable `detail` string (the frontend shows `detail`) plus the structured `errors`.
+    The offending input is not echoed back."""
+    errors = [{"loc": list(e.get("loc", ())), "msg": e.get("msg", ""), "type": e.get("type", "")} for e in exc.errors()]
+    detail = "; ".join(f"{_loc(e)}: {e['msg']}" for e in errors)[:500] or "Invalid request"
+    return JSONResponse({"detail": detail, "errors": errors[:20]}, status_code=422)
+
+
+@app.exception_handler(Exception)
+async def unhandled_error(_request: Request, _exc: Exception) -> JSONResponse:
+    return JSONResponse({"detail": "Internal server error"}, status_code=500)
+
+
+# ---- shared parameter types (finite, bounded) -------------------------------------------------------------------
+MAX_AT_S = 366 * 86_400.0  # scenario seconds: one year of replay / simulation is plenty
+AtQuery = Annotated[float | None, Query(ge=0, le=MAX_AT_S, allow_inf_nan=False, description="scenario seconds (default: now)")]
+RoleQuery = Annotated[str | None, Query(max_length=64)]
+IdPath = Annotated[str, PathParam(min_length=1, max_length=128)]
+MAX_TRACK_SAMPLES = 5_000
+
+
+def _check_role(role: str | None) -> None:
+    if role and role not in {r.id for r in views.ROLES}:
+        raise HTTPException(404, "Unknown role")
+
+
+def _now_or(at: float | None) -> float:
+    return engine.now_s() if at is None else at
+
+
+_world_memo = httpcache.Memo()
+_views_memo = httpcache.Memo()
+_layout_memo: dict[str, httpcache.Encoded] = {}
+_per_eval = httpcache.PerEvaluation()
 
 try:  # real public feeds (adsb.lol, Digitraffic, SMHI, Open-Meteo, RainViewer, polisen.se, Krisinformation, NOAA)
     from .routes_live import router as live_router
@@ -60,7 +135,7 @@ except ImportError:  # pragma: no cover - feeds package not installed in this bu
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "working", "mode": "synthetic", "apiVersion": API_VERSION, "clock": engine.clock(), "rules": len(rules.RULES),
-            "entities": len(engine.world.entities), "formations": len(engine.world.formations), "feeds": live_router is not None}
+            "entities": len(engine.world.entities), "formations": len(engine.world.formations), "feeds": live_router is not None, "boot": BOOT}
 
 
 @app.get("/api/clock")
@@ -69,60 +144,78 @@ def clock() -> dict:
 
 
 @app.get("/api/views")
-def get_views() -> dict:
-    return {"roles": [r.model_dump() for r in views.ROLES], "layers": [l.model_dump() for l in views.LAYERS], "rules": rules.rule_catalogue(),
-            "channels": [{"id": k, **v} for k, v in CHANNEL_META.items()], "regionScope": views.REGION_SCOPE, "exclusiveGroups": views.EXCLUSIVE_GROUPS}
+def get_views(request: Request) -> Response:
+    """Static per deployment: served from pre-encoded bytes with an ETag."""
+    enc = _views_memo.get(views, lambda: {
+        "roles": [r.model_dump() for r in views.ROLES], "layers": [l.model_dump() for l in views.LAYERS], "rules": rules.rule_catalogue(),
+        "channels": [{"id": k, **v} for k, v in CHANNEL_META.items()], "regionScope": views.REGION_SCOPE, "exclusiveGroups": views.EXCLUSIVE_GROUPS})
+    return httpcache.respond(request, enc)
 
 
 @app.get("/api/world")
-def world() -> dict:
-    """Order of battle, declared motion and shared route geometry (changes only when `catalogRevision` does)."""
-    return engine.catalog()
+def world(request: Request) -> Response:
+    """Order of battle, declared motion and shared route geometry (changes only when `catalogRevision` does).
+    ~2 MB of JSON: encoded and gzipped once per catalog, revalidated by ETag (304 when unchanged)."""
+    return httpcache.respond(request, _world_memo.get(engine.catalog()))
 
 
 @app.get("/api/sites/{site_id}/layout")
-def site_layout(site_id: str) -> dict:
-    lay = engine.world.layouts.get(site_id)
-    if not lay:
-        raise HTTPException(404, "Site not found")
-    return lay.to_api()
+def site_layout(request: Request, site_id: IdPath) -> Response:
+    enc = _layout_memo.get(site_id)
+    if enc is None:
+        lay = engine.world.layouts.get(site_id)
+        if not lay:
+            raise HTTPException(404, "Site not found")
+        enc = _layout_memo[site_id] = httpcache.Encoded(lay.to_api())
+    return httpcache.respond(request, enc, "public, max-age=300")
 
 
 @app.get("/api/scene/snapshot")
-def snapshot(at: float | None = Query(default=None, ge=0), role: str | None = None) -> dict:
-    if role and role not in {r.id for r in views.ROLES}:
-        raise HTTPException(404, "Unknown role")
-    return engine.snapshot(at, role)
+def snapshot(at: AtQuery = None, role: RoleQuery = None) -> dict:
+    _check_role(role)
+    t = _now_or(at)
+    ev = engine.evaluate(t)
+    base = _per_eval.get(ev, ("snapshot", role), lambda: engine.snapshot(t, role))
+    now = engine.now_s()  # per-request fields; everything else is a function of the evaluation
+    return {**base, "serverNow": datetime.now(timezone.utc).isoformat(), "nowS": round(now, 1), "live": t >= now - 2, "future": t > now + 5}
 
 
 @app.get("/api/scene/entities")
-def entities(at: float | None = Query(default=None, ge=0)) -> dict:
+def entities(at: AtQuery = None) -> dict:
     return engine.kinematics(at)
 
 
 @app.get("/api/scene/tracks/{entity_id}")
-def tracks(entity_id: str, from_s: float = Query(default=None, alias="from"), to_s: float = Query(default=None, alias="to"), step: float = Query(default=30, ge=1)) -> dict:
+def tracks(entity_id: IdPath, from_s: float | None = Query(default=None, alias="from", ge=0, le=MAX_AT_S, allow_inf_nan=False),
+           to_s: float | None = Query(default=None, alias="to", ge=0, le=MAX_AT_S, allow_inf_nan=False),
+           step: float = Query(default=30, ge=1, le=86_400, allow_inf_nan=False)) -> dict:
     if entity_id not in engine.world.entities:
         raise HTTPException(404, "Entity not found")
     now = engine.now_s()
     to_s = now if to_s is None else min(to_s, now)
     from_s = max(0.0, to_s - 1200) if from_s is None else from_s
+    if (to_s - from_s) / step > MAX_TRACK_SAMPLES:
+        raise HTTPException(422, f"too many samples: (to - from) / step must be at most {MAX_TRACK_SAMPLES}")
     return engine.tracks(entity_id, from_s, to_s, step)
 
 
 @app.get("/api/scene/attention")
-def attention(at: float | None = None, resolution: str = "regional", role: str | None = None) -> dict:
-    return engine.attention(at, resolution, role)
+def attention(at: AtQuery = None, resolution: Literal["national", "regional", "local"] = "regional", role: RoleQuery = None) -> dict:
+    _check_role(role)
+    t = _now_or(at)
+    ev = engine.evaluate(t)
+    base = _per_eval.get(ev, ("attention", resolution, role), lambda: engine.attention(t, resolution, role))
+    return {**base, "atS": round(t, 1)}
 
 
 @app.get("/api/scene/predictions")
-def predictions(at: float | None = None) -> dict:
-    ev = engine.evaluate(engine.now_s() if at is None else at)
+def predictions(at: AtQuery = None) -> dict:
+    ev = engine.evaluate(_now_or(at))
     return {"atS": round(ev.t, 1), "worldRevision": ev.revision, "predictions": [p.model_dump() for p in ev.fx.predictions]}
 
 
 @app.get("/api/entities/{entity_id}")
-def entity_detail(entity_id: str, at: float | None = None) -> dict:
+def entity_detail(entity_id: IdPath, at: AtQuery = None) -> dict:
     try:
         return engine.entity_detail(entity_id, at)
     except KeyError:
@@ -130,8 +223,8 @@ def entity_detail(entity_id: str, at: float | None = None) -> dict:
 
 
 @app.get("/api/inputs")
-def list_inputs(at: float | None = None, channel: str | None = None) -> dict:
-    ev = engine.evaluate(engine.now_s() if at is None else at)
+def list_inputs(at: AtQuery = None, channel: Annotated[str | None, Query(max_length=64)] = None) -> dict:
+    ev = engine.evaluate(_now_or(at))
     items = [i.model_dump() for i in ev.inputs if channel is None or i.channel == channel]
     return {"atS": round(ev.t, 1), "worldRevision": ev.revision, "count": len(items), "inputs": items}
 
@@ -143,24 +236,24 @@ def post_input(body: InputIn) -> dict:
 
 
 @app.get("/api/alerts")
-def alerts(at: float | None = None) -> dict:
-    ev = engine.evaluate(engine.now_s() if at is None else at)
+def alerts(at: AtQuery = None) -> dict:
+    ev = engine.evaluate(_now_or(at))
     return {"atS": round(ev.t, 1), "worldRevision": ev.revision, "alerts": [a.model_dump() for a in ev.fx.alerts]}
 
 
 @app.post("/api/alerts/{alert_id}/ack")
-def ack(alert_id: str) -> dict:
+def ack(alert_id: IdPath) -> dict:
     return engine.ack(alert_id)
 
 
 @app.get("/api/interventions")
-def interventions(at: float | None = None) -> dict:
-    ev = engine.evaluate(engine.now_s() if at is None else at)
+def interventions(at: AtQuery = None) -> dict:
+    ev = engine.evaluate(_now_or(at))
     return {"atS": round(ev.t, 1), "worldRevision": ev.revision, "interventions": [i.model_dump() for i in ev.fx.interventions]}
 
 
 @app.post("/api/interventions/{intervention_id}/commit")
-def commit(intervention_id: str, body: CommitIn) -> dict:
+def commit(intervention_id: IdPath, body: CommitIn) -> dict:
     try:
         return engine.commit(intervention_id, body.optionId, body.expectedRevision)
     except ValueError:
@@ -170,12 +263,14 @@ def commit(intervention_id: str, body: CommitIn) -> dict:
 
 
 @app.post("/api/interventions/{intervention_id}/abort")
-def abort(intervention_id: str) -> dict:
+def abort(intervention_id: IdPath) -> dict:
+    if intervention_id not in engine.commits:
+        raise HTTPException(404, "Intervention not committed")
     return engine.abort(intervention_id)
 
 
 @app.post("/api/strategy/optimize")
-def optimise(at: float | None = None) -> dict:
+def optimise(at: AtQuery = None) -> dict:
     return engine.optimise(at)
 
 
@@ -189,22 +284,54 @@ def apply_event(event: EventIn) -> dict:
         raise HTTPException(404, "Asset not found") from None
 
 
+def _check_lnglat(p: list) -> None:
+    lng, lat = p[0], p[1]
+    if lng is None or lat is None or not (-180 <= lng <= 180 and -90 <= lat <= 90):
+        raise ValueError("points are [lng, lat(, altM)] in degrees (lng -180..180, lat -90..90)")
+
+
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+MAX_PLAN_POINTS = 20_000
+
+
 class PlanIn(BaseModel):
-    entityId: str
-    to: list[float] = Field(min_length=2, max_length=2)
+    entityId: str = Field(min_length=1, max_length=128)
+    to: list[FiniteFloat] = Field(min_length=2, max_length=2)
+
+    @field_validator("to")
+    @classmethod
+    def _to_in_range(cls, v: list[float]) -> list[float]:
+        _check_lnglat(v)
+        return v
 
 
 class PlanCommitIn(BaseModel):
-    entityId: str
-    path: list[list[float | None]]
-    speeds: list[float]
+    """Validated in full before it is persisted: a malformed plan in the mutation log would fail every replay."""
+    entityId: str = Field(min_length=1, max_length=128)
+    path: list[Annotated[list[FiniteFloat | None], Field(min_length=2, max_length=3)]] = Field(min_length=2, max_length=MAX_PLAN_POINTS)
+    speeds: list[Annotated[float, Field(gt=0, le=1_000, allow_inf_nan=False)]] = Field(max_length=MAX_PLAN_POINTS)
     airborne: bool = False
-    label: str = "Planned route"
+    label: str = Field(default="Planned route", max_length=200)
     expectedRevision: int = Field(ge=1)
+
+    @field_validator("path")
+    @classmethod
+    def _points_in_range(cls, v: list[list[float | None]]) -> list[list[float | None]]:
+        for p in v:
+            _check_lnglat(p)
+        return [p if len(p) == 3 else [p[0], p[1], None] for p in v]  # motion.Path reads p[2] (altitude or None)
+
+    @model_validator(mode="after")
+    def _one_speed_per_segment(self) -> "PlanCommitIn":
+        if len(self.speeds) != len(self.path) - 1:
+            raise ValueError("speeds must have one entry per segment")
+        return self
 
 
 @app.post("/api/plan/route")
 def plan_route(body: PlanIn) -> dict:
+    if body.entityId not in engine.world.entities:
+        raise HTTPException(404, "Entity not found")
     ev = engine.evaluate(engine.now_s())
     e = ev.entities.get(body.entityId)
     if not e:
@@ -244,7 +371,7 @@ def plan_commit(body: PlanCommitIn) -> dict:
 
 
 class InjectIn(BaseModel):
-    preset: str
+    preset: str = Field(min_length=1, max_length=64)
 
 
 @app.get("/api/scenario/presets")
@@ -262,7 +389,9 @@ def scenario_inject(body: InjectIn) -> dict:
 
 
 @app.post("/api/plan/{entity_id}/cancel")
-def plan_cancel(entity_id: str) -> dict:
+def plan_cancel(entity_id: IdPath) -> dict:
+    if entity_id not in engine.world.entities:
+        raise HTTPException(404, "Entity not found")
     return engine.cancel_plan(entity_id)
 
 
@@ -272,7 +401,7 @@ def environment_points() -> dict:
 
 
 @app.get("/api/environment/forecast/{location}")
-def environment_forecast(location: str) -> dict:
+def environment_forecast(location: IdPath) -> dict:
     if location not in PUBLIC_POINTS:
         raise HTTPException(404, "Forecast point not found")
     return weather.get(location)

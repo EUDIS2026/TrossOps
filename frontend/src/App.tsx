@@ -42,7 +42,14 @@ export function App() {
   const mapRef = useRef<HTMLDivElement>(null)
   const [rt, setRt] = useState<Runtime | null>(null)
   const inspector = useApp(s => !!s.selected)
-  const drawer = useApp(s => Object.entries(s.panels).some(([k, v]) => v && k !== 'search'))
+  const openPanel = useApp(s => (Object.keys(s.panels) as Panel[]).find(p => p !== 'search' && s.panels[p]) ?? null)
+  const drawer = openPanel !== null
+  const selId = useApp(s => s.selected?.id)
+  const reduceMotion = useApp(s => s.reducedMotion)
+  // On narrow screens drawer and inspector overlap: the one opened last sits in front.
+  const [front, setFront] = useState<'drawer' | 'inspector'>('drawer')
+  useEffect(() => { if (selId) setFront('inspector') }, [selId])
+  useEffect(() => { if (openPanel) setFront('drawer') }, [openPanel])
   useEffect(() => {
     if (!mapRef.current) return
     const session = new Session()
@@ -52,13 +59,15 @@ export function App() {
   }, [])
   useShortcuts(rt)
   return <RuntimeContext.Provider value={rt}>
-    <div className={`app ${inspector ? 'with-inspector' : ''} ${drawer ? 'with-drawer' : ''}`}>
-      <div className="map-root" ref={mapRef} aria-label="Operational map" role="application" />
+    <div className={`app ${inspector ? 'with-inspector' : ''} ${drawer ? 'with-drawer' : ''} front-${front} ${reduceMotion ? 'reduce-motion' : ''}`}>
+      {/* DOM order is the tab order: top bar, key figures, dock, open panels, then the map and its overlays.
+          Every overlay is positioned with a z-index, so the map's place in the DOM does not change what is drawn on top. */}
       <TopBar />
       <Kpis />
       <Dock />
       <Drawer />
       <Inspector />
+      <div className="map-root" ref={mapRef} aria-label="Operational map" role="application" />
       <Legend />
       <RouteBanner />
       <HoverCard />

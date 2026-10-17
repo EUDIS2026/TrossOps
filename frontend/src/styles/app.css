@@ -8,7 +8,7 @@
   --hair-2: rgba(255, 255, 255, 0.13);
   --text: #e6edf2;
   --text-2: #a3b0bb;
-  --text-3: #6d7b87;
+  --text-3: #7f8d9a; /* 5:1 on --panel-solid (WCAG AA body text) */
   --accent: #4ea1ff;
   --accent-soft: rgba(78, 161, 255, 0.15);
   --friend: #80e0ff;
@@ -85,7 +85,7 @@ small { font-size: 11.5px; color: var(--text-2); }
 .icon-button:hover { background: var(--raised-2); color: var(--text); }
 .icon-button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 .icon-button.small { width: 22px; height: 22px; border-radius: 6px; }
-.badge { position: absolute; top: 1px; right: -2px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--critical); color: #fff; font-size: 10px; font-weight: 700; display: grid; place-items: center; border: 2px solid #0e1318; }
+.badge { position: absolute; top: 1px; right: -2px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #d93a41; color: #fff; font-size: 10px; font-weight: 700; display: grid; place-items: center; border: 2px solid #0e1318; }
 .badge.warning { background: var(--warning); color: #1b1408; }
 
 .search { position: relative; display: flex; align-items: center; gap: 8px; height: 32px; width: 300px; padding: 0 10px; border-radius: 9px; background: var(--raised); border: 1px solid var(--hair); color: var(--text-3); transition: width 0.3s var(--ease), border-color 0.2s; }
@@ -127,7 +127,7 @@ small { font-size: 11.5px; color: var(--text-2); }
 .seg.full { display: flex; margin-bottom: 10px; }
 .seg.full button { flex: 1; }
 .seg button { height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12px; color: var(--text-2); display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
-.seg button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+.seg button[aria-pressed="true"], .seg button[aria-selected="true"] { background: rgba(255, 255, 255, 0.1); color: var(--text); }
 .chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 8px; border: 1px solid var(--hair-2); font-size: 11.5px; color: var(--text-2); background: none; }
 .chip:hover { color: var(--text); background: var(--raised); }
 .chip[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: rgba(78, 161, 255, 0.4); }
@@ -170,7 +170,7 @@ small { font-size: 11.5px; color: var(--text-2); }
 .list { display: flex; flex-direction: column; gap: 2px; }
 .item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 8px; border-radius: 9px; text-align: left; }
 .item:hover:not(:disabled) { background: var(--raised); }
-.item[aria-selected="true"] { background: var(--accent-soft); }
+.item[aria-selected="true"], .item[aria-current="true"] { background: var(--accent-soft); }
 .item > span:not(.dot):not(.when):not(.grade):not(.mini):not(.glyph-ph) { flex: 1; min-width: 0; }
 .item strong { display: block; font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); }
@@ -341,7 +341,6 @@ b.good { color: var(--good); }
   .modes button { padding: 0 9px; }
   .search { width: 180px; }
   .search.open { width: 260px; }
-  .kpis { display: none; }
 }
 .terrain-profile { margin: 6px 0 2px; }
 .terrain-profile svg { display: block; border-radius: 6px; background: rgba(255, 255, 255, 0.03); }
@@ -367,3 +366,142 @@ button.kpi:hover { border-color: var(--accent); }
 .section.first { margin-top: 0; }
 .section .steps b { color: var(--text); font-weight: 600; }
 .legend-title small { color: var(--text-3); font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; font-size: 9.5px; margin-right: 4px; }
+
+/* ---- accessibility: focus, screen-reader text, reduced motion ------------------------------------------------- */
+.sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* rings inside scrolling containers are drawn inset so the overflow never clips them */
+.panel-body :focus-visible, .modes :focus-visible, .kpis :focus-visible, .search-results :focus-visible, .menu :focus-visible, .tabs :focus-visible, .seg :focus-visible { outline-offset: -2px; }
+.form input:focus-visible, .form select:focus-visible, .form textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+/* a panel that receives focus on open shows a quiet ring; its controls show the full one */
+.drawer:focus-visible, .inspector:focus-visible { outline: 1px solid rgba(78, 161, 255, 0.55); outline-offset: -1px; }
+/* a list row with its own action: two sibling buttons, never a button inside a button */
+.item-row { display: flex; align-items: center; gap: 4px; border-radius: 9px; }
+.item-row > .item { flex: 1; min-width: 0; }
+.item-row > .mini { margin-right: 8px; }
+.item-row.ack > .item { opacity: 0.55; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+.app.reduce-motion *, .app.reduce-motion *::before, .app.reduce-motion *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+/* hover-only tooltips stick after a tap on touch screens; the label is in aria-label and the Help panel */
+@media (hover: none) { .dock-btn[data-tip]:hover::after { display: none; } }
+
+/* ---- responsive ------------------------------------------------------------------------------------------------ */
+.topbar { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+.role-menu { min-width: 0; }
+.role-button { max-width: 100%; }
+.role-button > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu { width: min(360px, calc(100vw - 24px)); }
+/* very short screens (phone landscape): the dock scrolls instead of running off the bottom */
+@media (max-height: 600px) { .dock { overflow-y: auto; scrollbar-width: none; } .dock:has(.tools-menu) { overflow: visible; } }
+.toast { max-width: min(640px, calc(100vw - 32px)); }
+.banner { max-width: calc(100vw - 32px); }
+
+@media (max-width: 1280px) {
+  .search { width: 240px; }
+  .search.open { width: 320px; }
+  .role-button { max-width: 260px; }
+}
+@media (max-width: 1100px) {
+  .role-kicker { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .role-button { max-width: 200px; }
+  .kpi { min-width: 64px; padding: 5px 9px; }
+  .kpi b { font-size: 14.5px; }
+  .kpi small { font-size: 9.5px; letter-spacing: 0.05em; }
+  .status-chip small { display: none; }
+  /* the search keeps its width when focused (results open below), so it never runs into the mode tabs */
+  .search, .search.open { width: 170px; }
+}
+
+/* touch widths: every control at least 40 px */
+@media (max-width: 1024px), (pointer: coarse) {
+  :root { --top: 56px; }
+  .icon-button, .dock-btn { width: 40px; height: 40px; }
+  .icon-button.small { width: 32px; height: 32px; }
+  .icon-button.small::before, .expander::before, .crumbs button::before { content: ""; position: absolute; inset: -5px; }
+  .expander, .crumbs button { position: relative; }
+  .expander { width: 32px; height: 32px; }
+  .role-button, .status-chip, .search { height: 40px; }
+  .modes button { height: 40px; }
+  .seg button, .chip, .btn, .btn.small, .radio, .rate, .mini { min-height: 40px; }
+  .mini { display: inline-flex; align-items: center; padding: 0 12px; }
+  .rate { min-width: 40px; }
+  .layer-row { height: 42px; }
+  .lgroup-head { height: 46px; }
+  .lgroup-head > .switch { width: 52px; height: 40px; border: 11px solid transparent; background-clip: padding-box; }
+  .tabs button { height: 44px; }
+  .menu-item { min-height: 44px; }
+  .form input, .form select, .form textarea { padding: 10px; }
+  .map-root .maplibregl-ctrl-group button { width: 40px; height: 40px; }
+  .scrub input[type="range"] { height: 40px; }
+  .scrub .track { top: 18px; }
+  .scrub input[type="range"]::-webkit-slider-thumb { width: 20px; height: 20px; margin-top: -8px; }
+  .scrub input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; }
+  .tl-scale { margin-top: -8px; }
+}
+
+/* tablet portrait and narrower: mode tabs get their own row; panels overlay the map */
+@media (max-width: 900px) {
+  :root { --top: 104px; --drawer: min(380px, calc(100vw - var(--dock) - 16px)); }
+  .topbar { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 56px 48px; grid-template-areas: "brand actions" "modes modes"; row-gap: 0; }
+  .brand { grid-area: brand; }
+  .top-actions { grid-area: actions; }
+  .modes { grid-area: modes; justify-self: stretch; align-self: start; display: flex; overflow-x: auto; scrollbar-width: none; }
+  .modes::-webkit-scrollbar { display: none; }
+  .modes button { flex: 1 0 auto; white-space: nowrap; }
+  .search { width: 220px; flex: 0 1 auto; min-width: 0; }
+  .search.open { width: 280px; }
+  .kpis { top: calc(var(--top) + 8px); left: calc(var(--dock) + 8px); right: 8px; transform: none; justify-content: flex-start; overflow-x: auto; pointer-events: auto; scrollbar-width: none; padding-bottom: 2px; }
+  .kpis::-webkit-scrollbar { display: none; }
+  .kpi { flex: none; }
+  .drawer { width: var(--drawer); bottom: 8px; z-index: 27; }
+  .inspector { top: auto; left: calc(var(--dock) + 8px); right: 8px; bottom: 8px; width: auto; height: min(56vh, calc(100% - var(--top) - 16px)); z-index: 27; animation-name: slideUp; }
+  .front-drawer .drawer, .front-inspector .inspector { z-index: 28; }
+  .with-inspector .map-root .maplibregl-ctrl-bottom-right { right: 14px; bottom: calc(min(56vh, 100% - var(--top) - 16px) + 20px); }
+  .with-drawer .map-root .maplibregl-ctrl-bottom-left { left: calc(var(--dock) + 14px); }
+  .with-drawer .map-legend { left: calc(var(--dock) + 14px); }
+  .map-legend { max-width: calc(100vw - var(--dock) - 80px); }
+  .timeline { left: calc(var(--dock) + 8px); right: 8px; width: auto; transform: none; bottom: 8px; }
+  .toast { bottom: 100px; }
+  .toast.ok { bottom: 150px; }
+  .banner { top: calc(var(--top) + 64px); }
+}
+@keyframes slideUp { from { transform: translateY(16px); opacity: 0; } }
+
+/* phone */
+@media (max-width: 600px) {
+  .topbar { padding: 0 8px; gap: 8px; }
+  .brand { gap: 8px; }
+  .wordmark { padding-left: 2px; gap: 0; font-size: 0; }
+  .wordmark i { margin: 0 6px; }
+  .role-button { max-width: 150px; padding: 0 8px; gap: 4px; }
+  .top-actions { gap: 6px; }
+  .status-chip { padding: 0 9px; gap: 6px; }
+  .status-chip .word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  /* search folds to an icon; focusing it opens a full-width field over the first row */
+  .search { width: 40px; padding: 0; justify-content: center; flex: none; }
+  .search > svg { pointer-events: none; }
+  .search input { position: absolute; inset: 0; width: 100%; padding: 0 10px 0 34px; opacity: 0; cursor: pointer; }
+  .search kbd { display: none; }
+  .search.open { position: absolute; left: 8px; right: 8px; top: 8px; width: auto; z-index: 5; justify-content: flex-start; padding: 0 10px; background: var(--panel-solid); }
+  .search.open input { opacity: 1; cursor: text; }
+  .search-results { left: 0; right: 0; width: auto; }
+  .kpi { min-width: 0; padding: 4px 9px; }
+  .drawer { left: var(--dock); right: 0; top: var(--top); bottom: 0; width: auto; border-radius: 0; border-width: 1px 0 0 1px; }
+  .inspector { left: var(--dock); right: 0; bottom: 0; border-radius: var(--radius) var(--radius) 0 0; height: min(62vh, calc(100% - var(--top))); }
+  .with-inspector .map-root .maplibregl-ctrl-bottom-right { bottom: calc(min(62vh, 100% - var(--top)) + 12px); }
+  .timeline { flex-wrap: wrap; gap: 2px 8px; padding: 6px 10px 2px; }
+  .tl-clock { min-width: 0; flex: 1; }
+  .tl-clock b { font-size: 14px; }
+  .scrub { order: 3; flex: 1 0 100%; }
+  .map-root .maplibregl-ctrl-bottom-right { bottom: 124px; right: 8px; }
+  .map-root .maplibregl-ctrl-bottom-left, .with-drawer .map-root .maplibregl-ctrl-bottom-left { bottom: 124px; left: calc(var(--dock) + 4px); }
+  .map-legend, .with-drawer .map-legend { left: calc(var(--dock) + 8px); right: 60px; width: auto; max-width: none; bottom: 128px; }
+  .toast, .toast.ok { bottom: 128px; left: calc(var(--dock) + 8px); right: 8px; transform: none; max-width: none; }
+  .toast.ok { bottom: 178px; }
+  .banner { left: calc(var(--dock) + 8px); right: 8px; transform: none; flex-wrap: wrap; }
+  .hover { display: none; }
+  /* the details sheet covers the lower map: zoom buttons return when it closes (pinch zoom still works) */
+  .with-inspector .map-root .maplibregl-ctrl-bottom-right { display: none; }
+}

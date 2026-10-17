@@ -164,6 +164,32 @@ def test_nodes_within():
     assert len(big) < len(geonet.national().nodes_within(STOCKHOLM, 3_000))
 
 
+def _nodes_within_bruteforce(net, center, radius_m, classes=None):
+    """Reference: every vertex of every edge (the pre-optimisation algorithm, without the cell pre-filter)."""
+    want = None if classes is None else {i for i, c in enumerate(net.classes) if c in classes}
+    found = {}
+    for i in range(len(net.ea)):
+        if want is not None and net.ecls[i] not in want:
+            continue
+        for p in net.edge_coords(i):
+            d = haversine_m(center, p)
+            if d <= radius_m:
+                found[p] = d
+    return [p for p, _d in sorted(found.items(), key=lambda kv: (kv[1], kv[0]))]
+
+
+@pytest.mark.parametrize("name,center,radius,classes", [
+    ("national", (14.62, 57.78), 1_500, {"secondary", "tertiary"}),  # an in_field() style query
+    ("national", (20.66, 67.13), 6_000, {"secondary", "tertiary"}),  # sparse north: long edges only
+    ("national", STOCKHOLM, 4_000, None),
+    ("gotland", VISBY, 1_800, {"secondary", "tertiary", "minor"}),
+])
+def test_nodes_within_matches_bruteforce(name, center, radius, classes):
+    net = geonet.national() if name == "national" else geonet.city(name)
+    got = net.nodes_within(center, radius, classes)
+    assert got == _nodes_within_bruteforce(net, center, radius, classes)
+
+
 # --- sea ---------------------------------------------------------------------------------
 
 def test_is_water():

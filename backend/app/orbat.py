@@ -28,7 +28,7 @@ from . import geo, sitegen
 from .motion import MotionSpec, Path, densify, racetrack
 
 ROUTE_CACHE = FsPath(__file__).resolve().parents[1] / "data" / "world_routes.json.gz"
-ROUTE_CACHE_VERSION = 11  # 11: plausibility pass (field units by roads, HG in own county, re-seeded sites); 7: sites on dry road-free ground (berths in the sea); columns and loops on the network
+ROUTE_CACHE_VERSION = 12  # 12: plausibility pass (field units by roads, Home Guard in own county, nearest reachable site fit); 11: platform-stable keys; 7: sites on dry road-free ground
 
 # Public reference points (city centres, coastal and sea waypoints), [lng, lat].
 P: dict[str, tuple[float, float]] = {
@@ -200,7 +200,18 @@ class RouteCache:
 
     @staticmethod
     def key(*parts) -> str:
-        return hashlib.sha1(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:16]
+        """Platform-independent key: floats are rounded to 6 decimals (~0.1 m) first. Inputs come from trigonometry
+        (offsets, bearings), and Windows and Linux libm can differ in the last bit — with full-precision keys a cache
+        built on one platform missed on the other (Vercel recomputed ~90 routes, ~40 s, on every cold start)."""
+        def norm(v):
+            if isinstance(v, float):
+                return round(v, 6) + 0.0  # + 0.0 folds -0.0 into 0.0
+            if isinstance(v, (list, tuple)):
+                return [norm(x) for x in v]
+            if isinstance(v, dict):
+                return {k: norm(x) for k, x in v.items()}
+            return v
+        return hashlib.sha1(json.dumps(norm(parts), sort_keys=True, default=str).encode()).hexdigest()[:16]
 
     def get(self, key: str, compute) -> list[tuple[float, float]]:
         with self.lock:
