@@ -115,4 +115,11 @@ export interface LiveAircraft { id: string; callsign: string | null; registratio
   onGround?: boolean; speedMps: number | null; headingDeg: number | null; verticalRateMps: number | null; squawk: string | null; emergency: string | null; military: boolean; nic: number | null; nacp: number | null; seenS: number | null; source: string }
 export interface LiveVessel { id: string | number; name: string | null; callsign: string | null; imo: number | null; shipType: number | null; shipTypeLabel: string | null; lng: number; lat: number
   speedMps: number | null; courseDeg: number | null; headingDeg: number | null; navStatus: number | null; navStatusLabel: string | null; destination: string | null; timestampMs: number | null; source: string }
+// ---- terrain (/api/terrain, Lantmäteriet Markhöjd Direkt; 503 while not configured) -----------------------------
+export interface TerrainElevation { lng: number; lat: number; groundM: number | null; datum: string; source: string }
+export interface TerrainProfile { distanceM: number[]; groundM: (number | null)[]; points: [number, number][]; minM: number | null; maxM: number | null; climbM: number; source: string }
+export interface LineOfSight {
+  visible: boolean; minClearanceM: number | null; obstruction: { lng: number; lat: number; distanceM: number; groundM: number } | null
+  distanceM: number; observerM: number; targetM: number; profile: TerrainProfile & { clearanceM: (number | null)[] }; method: string
+}
 export interface FeedPayload<T> { status: FeedStatus; source?: string; licence?: string; fetchedAt?: string; stale?: boolean; items?: T[]; [k: string]: unknown }

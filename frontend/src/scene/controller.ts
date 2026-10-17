@@ -17,6 +17,7 @@ import { CinematicCamera } from './camera'
 import { ModelLayer, modelZoomFor, type ModelInstance } from './models3d'
 import { addOverlays, circleRing, DETAIL_LAYERS, empty, nightPolygon, OVERLAY_LAYERS, setData } from './overlays'
 import { SpriteLayer } from './sprites'
+import { toolCapturesMap } from './tools'
 import { WindLayer } from './windfield'
 import { halo, headingArrow, natoSymbol, palette, trafficIcon, vesselColor } from './symbols'
 import { hasTopdown, topdownImage, TOPDOWN_FILL } from './topdown'
@@ -666,6 +667,7 @@ export class SceneController {
   }
 
   private onClick(e: MapMouseEvent) {
+    if (toolCapturesMap()) return // a map tool (scene/tools.ts) owns this click
     const s = store.get()
     if (s.route?.picking) { void this.session.planRoute(s.route.entityId, [e.lngLat.lng, e.lngLat.lat]); return }
     const hit = this.pick(e.point.x, e.point.y)
@@ -698,7 +700,7 @@ export class SceneController {
     this.hoverRaf = requestAnimationFrame(() => {
       this.hoverRaf = 0
       const s = store.get()
-      if (s.route?.picking) return
+      if (s.route?.picking || toolCapturesMap()) return
       const hit = this.pick(e.point.x, e.point.y)
       this.map.getCanvas().style.cursor = hit ? 'pointer' : ''
       if (!hit) { if (s.hovered) actions.hover(null); return }

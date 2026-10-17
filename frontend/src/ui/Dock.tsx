@@ -3,6 +3,7 @@ import type { Alert, InputReport, LayerDef } from '../contracts/types'
 import { actions, EMPTY, EMPTY_OBJ, layerOn, store, useApp, type Basemap, type Panel } from '../core/store'
 import { ago, channelLabel, Fact, fmtTime, useRuntime } from './context'
 import { Icon } from './icons'
+import { ToolsDockButton } from './tools/ToolsControl'
 
 const DOCK: { panel: Panel; icon: keyof typeof Icon; label: string; key: string }[] = [
   { panel: 'layers', icon: 'layers', label: 'Layers', key: 'L' },
@@ -23,6 +24,7 @@ export function Dock() {
   return <nav className="dock" aria-label="Tools">
     {DOCK.map(d => { const I = Icon[d.icon]; return <button key={d.panel} className="dock-btn" aria-pressed={panels[d.panel]} title={`${d.label} (${d.key})`} onClick={() => actions.togglePanel(d.panel)}>
       <I />{d.panel === 'layers' && critical && <span className="dot critical" />}</button> })}
+    <ToolsDockButton />
     <span className="dock-sep" />
     <button className="dock-btn" aria-pressed={threeD} title="3D (3)" onClick={() => actions.toggle3d()}><Icon.cube /></button>
     <button className="dock-btn" title={`Basemap: ${basemap}`} onClick={() => actions.setBasemap(({ operational: 'satellite', satellite: 'offline', offline: 'operational' } as Record<Basemap, Basemap>)[basemap])}>
@@ -278,7 +280,7 @@ function SourcesPanel() {
 }
 
 function HelpPanel() {
-  const rows: [string, string][] = [['/', 'Search'], ['L', 'Layers'], ['A', 'Alerts and reports'], ['D', 'Decisions'], ['S', 'Simulate'], ['R', 'Submit a report'], ['I', 'Data sources'], ['3', '3D'], ['F', 'Follow selection'], ['Space', 'Pause / resume simulation'], ['Esc', 'Deselect / close'], ['Home', 'Reset view']]
+  const rows: [string, string][] = [['/', 'Search'], ['L', 'Layers'], ['A', 'Alerts and reports'], ['D', 'Decisions'], ['S', 'Simulate'], ['R', 'Submit a report'], ['I', 'Data sources'], ['3', '3D'], ['F', 'Follow selection'], ['T', 'Map tools'], ['M', 'Measure distance'], ['V', 'Line of sight'], ['C', 'Range ring'], ['E', 'Elevation readout'],['Space', 'Pause / resume simulation'], ['Esc', 'Deselect / close'], ['Home', 'Reset view']]
   return <>
     <div className="help">{rows.map(([k, v]) => <Fragment key={k}><kbd>{k}</kbd><span>{v}</span></Fragment>)}</div>
     <div className="section"><h4>Reading the map</h4><small className="quiet">Symbols follow NATO APP-6: cyan rectangle friend, yellow quatrefoil unknown, red diamond suspect, purple civil. Formations collapse into one symbol while their units fit together on screen and open up as you zoom; the number after a designation is its platform count. A bar under a symbol is its condition (amber degraded, red unavailable). Real public traffic is drawn as plain silhouettes.</small></div>
