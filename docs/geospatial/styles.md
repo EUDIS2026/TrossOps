@@ -5,8 +5,8 @@
 | Dark (default) | [OpenFreeMap](https://openfreemap.org) `styles/dark` (OpenMapTiles schema, OpenStreetMap data) | Free, key-less, attribution shown; no SLA | working online; falls back to Offline when the style cannot load |
 | Imagery | [EOX Sentinel-2 cloudless 2023](https://s2maps.eu) WMTS | CC BY-NC-SA 4.0, contains modified Copernicus Sentinel data; attribution shown; non-commercial use | working online (raster), county outlines overlaid |
 | Offline | Bundled SCB county polygons as land, no tiles | SCB digital boundaries, CC0 | working with no network at all |
-| Terrain | [Mapterhorn](https://mapterhorn.com) elevation TileJSON, hillshade | open data, attribution from TileJSON | working online (Dark/Imagery) |
-| 3D buildings | OpenFreeMap vector tiles, `building` layer, `render_height` | as Dark | working online in 3D above zoom 14 |
+| Terrain | [Mapterhorn](https://mapterhorn.com) elevation TileJSON, hillshade | open data, attribution from TileJSON | working online (Dark/Imagery); exaggeration 1.2 below z11 easing to true scale from z13 |
+| 3D buildings | OpenFreeMap vector tiles, `building` layer: `fill-extrusion` from `render_height` / `render_min_height` (OSM heights; many buildings fall back to a default height), blurred contact shadow, map-anchored style light | as Dark | working online in 3D above zoom 14, in Dark and Imagery; flat footprints in 2D Dark |
 | County boundaries | `frontend/public/data/sweden_counties.geojson` (21 counties, WGS84, simplified by SCB for thematic display) | CC0 | working |
 | Weather | SMHI SNOW1G point forecasts, seven public city points | public open data; forecast, not observation | `connected` when SMHI answers, otherwise `unavailable` with the reason |
 

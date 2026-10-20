@@ -24,7 +24,14 @@ Real public feeds are marked `real` in the layer tree and the inspector.
 - **Zoom by echelon.** Formations collapse into one NATO APP-6 symbol while their units fit together on screen and
   open into battalions, companies and vehicles as they spread out, inside a per-zoom symbol budget.
 - **Site detail and 3D.** Procedural layouts for airbases, naval bases, garrisons and depots on their own detail
-  layers; 53 procedural 3D models with attitude on terrain; a cinematic fly-in and orbit when a site is selected.
+  layers; 57 procedural 3D models with attitude on terrain; a cinematic fly-in and orbit when a site is selected.
+- **Airbases in depth.** Runway with shoulders, blast pads, threshold, touchdown-zone and aiming-point markings,
+  arresting gear and full lighting (approach, edge, threshold, PAPI, taxiway, stop bars); a named taxiway system
+  (A, A1–A4, rapid exits B1/B2) with holding positions and arm/de-arm pads; a stand-marked apron with hydrant fuel;
+  dispersal loops of hardened shelters between earth revetments; a fenced QRA compound with its own taxiway; ILS,
+  TACAN and weather navaids; de-icing, run-up and compass pads, hush house and fire station; a reserve road strip,
+  a fenced weapons storage area and a landside cantonment. Aircraft taxi by shortest path on the taxiway graph,
+  through the arming pad to line-up, and leave the runway by the rapid exit nearer their stand.
 - **Fusion that explains itself.** The inspector shows **Why** (sources graded on the Admiralty scale, corroboration,
   identity hypotheses), **Prediction** (competing trajectory hypotheses with probabilities), **Deception** (named
   indicators with log-odds weights) and **Actions**.
@@ -61,7 +68,7 @@ The **Data sources** drawer (`I`) and `GET /api/sources` show each feed's live s
 | Trafikverket road situations (`trafikverket`) | working with key, else adapter-only | `TRAFIKVERKET_API_KEY` | Trafikverket open data |
 | NASA FIRMS active fires (`firms`) | working with key, else adapter-only | `FIRMS_MAP_KEY` | NASA open data |
 | Lantmäteriet Markhöjd Direkt terrain (`lm-markhojd`) | working with key, else adapter-only (terrain endpoints return 503) | `LANTMATERIET_USERNAME` / `LANTMATERIET_PASSWORD` | Lantmäteriet, free |
-| Basemap, terrain, imagery: OpenFreeMap, Mapterhorn, EOX Sentinel-2 | working (browser) | none | ODbL; open; CC BY-NC-SA |
+| Basemap, terrain, imagery, 3D buildings: OpenFreeMap, Mapterhorn, EOX Sentinel-2 | working (browser) | none | ODbL; open; CC BY-NC-SA |
 | Order of battle, sites, reports, scenario | simulated | — | synthetic |
 
 ## Quick start

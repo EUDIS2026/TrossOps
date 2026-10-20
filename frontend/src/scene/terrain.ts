@@ -132,3 +132,11 @@ export class TerrainDrape {
     m._terrainDataCallback = cb
   }
 }
+
+/** Terrain exaggeration by zoom: 1.2 below z11 so relief reads at national and regional scale, 1.0 from z13 so
+ * buildings, sites and models stand on true-scale ground (setTerrain takes a number, not an expression). */
+export function terrainExaggeration(zoom: number): number {
+  if (zoom <= 11) return 1.2
+  if (zoom >= 13) return 1.0
+  return Math.round((1.2 - (0.2 * (zoom - 11)) / 2) * 100) / 100
+}

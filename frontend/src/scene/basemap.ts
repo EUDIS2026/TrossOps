@@ -67,6 +67,22 @@ function vectorLayers(sat: boolean): LayerSpecification[] {
         'line-width': ['interpolate', ['linear'], ['zoom'], 3, ['case', national, 0.8, 0.8], 10, ['case', national, 2, 0.8]] as never,
         'line-dasharray': ['case', national, ['literal', [1, 0]], ['literal', [3, 2]]] as never } },
   ]
+  // 3D buildings (both online basemaps, shown only in 3D mode): OpenFreeMap render_height / render_min_height, grown in
+  // over z14-14.6 so they do not pop; a blurred dark line at the footprint reads as a contact shadow. Opacity 1 keeps
+  // the extrusion a single pass.
+  const height = ['coalesce', ['get', 'render_height'], 5]
+  const buildings3d: LayerSpecification[] = [
+    { id: 'building-contact', type: 'line', source: v, 'source-layer': 'building', minzoom: 14, filter: ['!=', ['get', 'hide_3d'], true], layout: { visibility: 'none' },
+      paint: { 'line-color': '#020406', 'line-opacity': ['interpolate', ['linear'], ['zoom'], 14, 0, 15.5, sat ? 0.35 : 0.55],
+        'line-width': ['interpolate', ['exponential', 2], ['zoom'], 14, 1, 18, 14], 'line-blur': ['interpolate', ['exponential', 2], ['zoom'], 14, 1, 18, 12] } },
+    { id: 'building-3d', type: 'fill-extrusion', source: v, 'source-layer': 'building', minzoom: 14, filter: ['!=', ['get', 'hide_3d'], true], layout: { visibility: 'none' },
+      paint: {
+        'fill-extrusion-color': (sat ? ['interpolate', ['linear'], height, 0, '#5d646b', 60, '#8a9198']
+          : ['interpolate', ['linear'], height, 0, '#252c34', 12, '#2b333c', 30, '#323b45', 80, '#3a4550', 200, '#45525f']) as never,
+        'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'], 14, 0, 14.6, height] as never,
+        'fill-extrusion-base': ['interpolate', ['linear'], ['zoom'], 14, 0, 14.6, ['coalesce', ['get', 'render_min_height'], 0]] as never,
+        'fill-extrusion-vertical-gradient': true, 'fill-extrusion-opacity': 1 } },
+  ]
   const labels: LayerSpecification[] = [
     { id: 'water-label', type: 'symbol', source: v, 'source-layer': 'water_name', minzoom: 4,
       layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 11, 'text-letter-spacing': 0.15, 'text-max-width': 8 },
@@ -91,17 +107,20 @@ function vectorLayers(sat: boolean): LayerSpecification[] {
       layout: { 'text-field': ['upcase', ['get', 'name:en']], 'text-font': FONT_BOLD, 'text-size': 11, 'text-letter-spacing': 0.35 },
       paint: { 'text-color': '#5b6874', 'text-halo-color': C.halo, 'text-halo-width': 1 } },
   ]
-  return [...base, ...roads, ...borders, ...labels]
+  return [...base, ...roads, ...borders, ...buildings3d, ...labels]
 }
 
+/** Map-anchored light for extrusions (kept by setStyle because it lives in the style root). */
+const LIGHT: StyleSpecification['light'] = { anchor: 'map', color: '#c8d6e5', intensity: 0.42, position: [1.15, 210, 40] }
+
 export const operationalStyle: StyleSpecification = {
-  version: 8, name: 'TrossOps operational', glyphs: GLYPHS,
+  version: 8, name: 'TrossOps operational', glyphs: GLYPHS, light: LIGHT,
   sources: { ofm: { type: 'vector', url: VECTOR_TILES_URL } },
   layers: [{ id: 'background', type: 'background', paint: { 'background-color': C.bg } }, ...vectorLayers(false)],
 }
 
 export const satelliteStyle: StyleSpecification = {
-  version: 8, name: 'TrossOps imagery', glyphs: GLYPHS,
+  version: 8, name: 'TrossOps imagery', glyphs: GLYPHS, light: LIGHT,
   sources: { imagery: { type: 'raster', tiles: [IMAGERY_TILES], tileSize: 256, maxzoom: 14, attribution: ATTRIBUTION.satellite }, ofm: { type: 'vector', url: VECTOR_TILES_URL } },
   layers: [
     { id: 'background', type: 'background', paint: { 'background-color': '#0b1016' } },

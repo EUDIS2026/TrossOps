@@ -77,6 +77,7 @@ export class TextLayer implements CustomLayerInterface {
   }
 
   onAdd(map: MlMap, gl: WebGL2RenderingContext) {
+    if (this.program && this.gl === gl) { this.map = map; return } // re-added after a style switch: keep GL objects
     this.map = map; this.gl = gl
     const p = this.program = link(gl, VS, FS)
     for (const a of ['a_corner', 'a_pos', 'a_box', 'a_uv', 'a_alpha']) this.loc[a] = gl.getAttribLocation(p, a)
@@ -266,6 +267,7 @@ export class LeaderLayer implements CustomLayerInterface {
   type = 'custom' as const
   renderingMode = '2d' as const
   private map: MlMap | null = null
+  private gl: WebGL2RenderingContext | null = null
   private program: WebGLProgram | null = null
   private vao: WebGLVertexArrayObject | null = null
   private buf: WebGLBuffer | null = null
@@ -279,7 +281,8 @@ export class LeaderLayer implements CustomLayerInterface {
   constructor(id: string) { this.id = id }
 
   onAdd(map: MlMap, gl: WebGL2RenderingContext) {
-    this.map = map
+    if (this.program && this.gl === gl) { this.map = map; this.sig = ''; return }
+    this.map = map; this.gl = gl
     const p = this.program = link(gl, LVS, LFS)
     for (const u of ['u_mvp', 'u_color']) this.uni[u] = gl.getUniformLocation(p, u)
     this.vao = gl.createVertexArray()
@@ -296,7 +299,7 @@ export class LeaderLayer implements CustomLayerInterface {
     if (this.program) gl.deleteProgram(this.program)
     if (this.vao) gl.deleteVertexArray(this.vao)
     if (this.buf) gl.deleteBuffer(this.buf)
-    this.program = null; this.vao = null; this.buf = null; this.map = null
+    this.program = null; this.vao = null; this.buf = null; this.map = null; this.gl = null
   }
 
   begin(cx: number, cy: number, worldPx: number) { this.cx = cx; this.cy = cy; this.worldPx = worldPx; this.lines.length = 0 }

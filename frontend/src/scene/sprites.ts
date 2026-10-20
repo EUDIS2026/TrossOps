@@ -59,6 +59,7 @@ export class SpriteLayer implements CustomLayerInterface {
   constructor(id: string, private factory: (key: string) => HTMLCanvasElement) { this.id = id }
 
   onAdd(map: MlMap, gl: WebGL2RenderingContext) {
+    if (this.program && this.gl === gl) { this.map = map; return } // re-added after a style switch: keep GL objects
     this.map = map; this.gl = gl
     const compile = (type: number, src: string) => { const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader'); return s }
     const p = gl.createProgram()!

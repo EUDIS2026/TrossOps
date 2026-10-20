@@ -30,6 +30,7 @@ export class WindLayer implements CustomLayerInterface {
   renderingMode = '2d' as const
   enabled = false
   private map: MlMap | null = null
+  private gl: WebGL2RenderingContext | null = null
   private prog: WebGLProgram | null = null
   private buf: WebGLBuffer | null = null
   private vao: WebGLVertexArrayObject | null = null
@@ -75,7 +76,8 @@ export class WindLayer implements CustomLayerInterface {
   }
 
   onAdd(map: MlMap, gl: WebGL2RenderingContext) {
-    this.map = map
+    if (this.prog && this.gl === gl) { this.map = map; return } // re-added after a style switch: keep GL objects
+    this.map = map; this.gl = gl
     const sh = (t: number, src: string) => { const s = gl.createShader(t)!; gl.shaderSource(s, src); gl.compileShader(s); return s }
     const p = gl.createProgram()!
     gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p)
@@ -91,7 +93,7 @@ export class WindLayer implements CustomLayerInterface {
     gl.bindVertexArray(null)
   }
 
-  onRemove(_m: MlMap, gl: WebGL2RenderingContext) { if (this.prog) gl.deleteProgram(this.prog); if (this.buf) gl.deleteBuffer(this.buf); this.map = null }
+  onRemove(_m: MlMap, gl: WebGL2RenderingContext) { if (this.prog) gl.deleteProgram(this.prog); if (this.buf) gl.deleteBuffer(this.buf); this.prog = null; this.buf = null; this.gl = null; this.map = null }
 
   render(gl: WebGL2RenderingContext, options: CustomRenderMethodInput) {
     const map = this.map

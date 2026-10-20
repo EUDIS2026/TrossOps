@@ -17,7 +17,7 @@ import { CinematicCamera } from './camera'
 import { ModelLayer, modelZoomFor, type ModelInstance } from './models3d'
 import { addOverlays, circleRing, DETAIL_LAYERS, empty, nightPolygon, OVERLAY_LAYERS, setData, setVisible } from './overlays'
 import { SpriteLayer } from './sprites'
-import { TerrainDrape } from './terrain'
+import { TerrainDrape, terrainExaggeration } from './terrain'
 import { LeaderLayer, TextLayer } from './text'
 import { toolCapturesMap } from './tools'
 import { WindLayer } from './windfield'
@@ -92,6 +92,7 @@ export class SceneController {
       const msg = String((e as unknown as { error?: Error }).error?.message ?? '')
       if (this.basemap !== 'offline' && !this.styleReady && !/worker/i.test(msg) && /style|Failed to fetch|NetworkError/i.test(msg)) actions.setBasemap('offline')
     })
+    this.map.on('zoomend', () => this.retuneTerrain())
     this.map.on('moveend', () => {
       const c = this.map.getCenter()
       store.set({ camera: { zoom: this.map.getZoom(), pitch: this.map.getPitch(), bearing: this.map.getBearing(), lng: c.lng, lat: c.lat } })
@@ -167,11 +168,14 @@ export class SceneController {
     for (const [layer, ids] of Object.entries(OVERLAY_LAYERS)) for (const id of ids) this.vis(id, this.onLayers.has(layer))
     for (const [layer, ids] of Object.entries(DETAIL_LAYERS)) {
       for (const id of ids) {
+        if (id.endsWith('-flat') && ids.includes(id.slice(0, -5))) continue // toggled with its extrusion below
         const on = this.onLayers.has(layer)
         if (this.map.getLayer(`${id}-flat`)) { this.vis(id, on && s.threeD); this.vis(`${id}-flat`, on && !s.threeD) } else this.vis(id, on)
       }
     }
     this.vis('site-logistics-bund', this.onLayers.has('detail.logistics'))
+    // basemap buildings: flat footprints in 2D (Dark), extruded with a contact shadow in 3D (Dark and Imagery)
+    this.vis('building', !s.threeD); this.vis('building-3d', s.threeD); this.vis('building-contact', s.threeD)
     this.wind.enabled = this.onLayers.has('env.wind')
     const an = analysisLayer(s)
     this.vis('analysis-fill', !!an && !s.threeD); this.vis('analysis-3d', !!an && s.threeD)
@@ -193,10 +197,18 @@ export class SceneController {
     this.applyLayers(s)
   }
 
+  /** Keep the terrain exaggeration in step with the zoom (called on zoomend). */
+  private retuneTerrain() {
+    const t = this.map.getTerrain()
+    if (!t) return
+    const ex = terrainExaggeration(this.map.getZoom())
+    if (Math.abs((t.exaggeration ?? 1) - ex) > 0.01) this.map.setTerrain({ ...t, exaggeration: ex })
+  }
+
   private applyTerrain(s: AppState) {
     if (s.terrain && this.basemap !== 'offline') {
       if (!this.map.getSource('dem')) this.map.addSource('dem', { type: 'raster-dem', url: TERRAIN_TILEJSON })
-      this.map.setTerrain({ source: 'dem', exaggeration: 1.2 })
+      this.map.setTerrain({ source: 'dem', exaggeration: terrainExaggeration(this.map.getZoom()) })
       if (!this.map.getLayer('hillshade')) this.map.addLayer({ id: 'hillshade', type: 'hillshade', source: 'dem', paint: { 'hillshade-exaggeration': 0.35, 'hillshade-shadow-color': '#05080b', 'hillshade-highlight-color': '#3a4652', 'hillshade-accent-color': '#0d1318' } }, this.map.getLayer('road-minor') ? 'road-minor' : 'night')
       if (!this.map.getLayer('sky')) this.map.setSky({ 'sky-color': '#0b1520', 'horizon-color': '#1a2836', 'fog-color': '#0d151d', 'fog-ground-blend': 0.6, 'horizon-fog-blend': 0.6, 'sky-horizon-blend': 0.7, 'atmosphere-blend': 0.5 })
       this.drape.enable() // one drape, invalidated only by sources it shows (see terrain.ts)
@@ -438,6 +450,14 @@ export class SceneController {
     this.sprites.begin(cx, cy, worldPx)
     this.labels.begin(cx, cy, worldPx)
     const labelsOn = on.has('picture.labels')
+    // With terrain on, the models stand on the terrain surface; symbols and labels must be anchored there too, not at
+    // sea level (an MSL altitude below the ground is clamped to it, as the model layer does).
+    const terrainOn = !!this.map.getTerrain()
+    const onGround = (lng: number, lat: number, alt: number | null) => {
+      if (!terrainOn) return alt
+      const ground = this.map.queryTerrainElevation([lng, lat]) ?? 0
+      return Math.max(alt ?? 0, ground) || null
+    }
     const label = (mx: number, my: number, alt: number | null, lng: number, lat: number, text: string, color: string, size: number, rank: number) => {
       const p = this.map.project([lng, lat])
       this.labels.push(mx, my, alt, lat, p.x, p.y, text, color, size, rank, 1.9 * size - 2)
@@ -453,8 +473,9 @@ export class SceneController {
       const size = (it.aggregate ? ECHELON_PX[e.echelon ?? 'company'] ?? 48 : isSite ? 52 : 46) * zs * (isSite && (zoom > 13.5 || zoom < 6.5) ? 0.72 : 1)
       const mx = mercX(it.lng), my = mercY(it.lat)
       const alt = !it.aggregate && n.pose.alt && n.pose.alt > 0 ? n.pose.alt : null
+      const za = onGround(it.lng, it.lat, alt)
       const selected = sel?.id === e.id
-      if (selected || hovered === e.id) this.sprites.push(mx, my, alt, it.lat, `halo|${selected ? 1 : 0}`, size * 1.25, 0, 1)
+      if (selected || hovered === e.id) this.sprites.push(mx, my, za, it.lat, `halo|${selected ? 1 : 0}`, size * 1.25, 0, 1)
       if (leafModel) {
         modelInstances.push({ id: e.id, lng: it.lng, lat: it.lat, alt: n.pose.alt, heading: n.pose.heading, pitch: n.pose.pitch, bank: n.pose.bank, model: e.model!, affiliation: e.affiliation, condition: cond, selected, speed: n.pose.speed })
       } else if (!s.threeD && zoom >= 14.6 && !it.aggregate && !isSite && hasTopdown(e.model)) {
@@ -465,14 +486,14 @@ export class SceneController {
         this.sprites.push(mx, my, null, it.lat, `td|${e.model}|${e.affiliation}`, px, n.pose.heading - bearing, n.status?.[5] ? 0.55 : 1)
         if (cond !== 'normal') this.sprites.push(mx, my, null, it.lat, `halo|0`, px * 0.8, 0, 1)
       } else {
-        this.sprites.push(mx, my, alt, it.lat, `ms|${e.sidc ?? 'SUGP--------'}|${cond}`, size, 0, n.status?.[5] ? 0.55 : 1)
-        if (!it.aggregate && n.pose.speed > 0.5) this.sprites.push(mx, my, alt, it.lat, `arrow|${e.affiliation === 'unknown' ? '#ffff8c' : e.affiliation === 'civil' ? '#f2b8f2' : '#d8f4ff'}`, size, n.pose.heading - bearing, 0.95)
+        this.sprites.push(mx, my, za, it.lat, `ms|${e.sidc ?? 'SUGP--------'}|${cond}`, size, 0, n.status?.[5] ? 0.55 : 1)
+        if (!it.aggregate && n.pose.speed > 0.5) this.sprites.push(mx, my, za, it.lat, `arrow|${e.affiliation === 'unknown' ? '#ffff8c' : e.affiliation === 'civil' ? '#f2b8f2' : '#d8f4ff'}`, size, n.pose.heading - bearing, 0.95)
       }
       drawn.push({ kind: e.kind === 'formation' ? 'formation' : isSite ? 'site' : e.affiliation === 'unknown' ? 'track' : 'entity', id: e.id, lng: it.lng, lat: it.lat, alt, r: size * 0.36 })
       // labels: aggregates first, then sites, then platforms (only from z9 unless selected or an unknown track)
       if (labelsOn && (it.aggregate || isSite || zoom >= 9 || selected || e.affiliation === 'unknown') && (!isSite || zoom >= 6.5 || /^(airbase|navbase)/.test(e.id) || selected)) {
         const text = it.aggregate ? `${e.short ?? e.label} · ${it.count}` : isSite ? e.label : zoom >= 12 ? e.label : (e.short ?? e.label)
-        label(mx, my, alt, it.lng, it.lat, text, AFF_LABEL[e.affiliation] ?? '#dfe6ec', it.aggregate ? 11 : 10, selected ? -1 : it.aggregate ? 0 : isSite ? 1 : 2)
+        label(mx, my, za, it.lng, it.lat, text, AFF_LABEL[e.affiliation] ?? '#dfe6ec', it.aggregate ? 11 : 10, selected ? -1 : it.aggregate ? 0 : isSite ? 1 : 2)
       }
     }
     // real public traffic (dead-reckoned from the last fetch)
@@ -486,11 +507,12 @@ export class SceneController {
         const sz = (a.military ? 46 : 38) * zs
         const mx = mercX(lng), my = mercY(lat)
         if (mx < view.minx - 0.01 || mx > view.maxx + 0.01 || my < view.miny - 0.01 || my > view.maxy + 0.01) continue
-        if (sel?.id === a.id || hovered === a.id) this.sprites.push(mx, my, a.altM, lat, `halo|${sel?.id === a.id ? 1 : 0}`, sz * 1.3, 0, 1)
+        const za = onGround(lng, lat, a.altM)
+        if (sel?.id === a.id || hovered === a.id) this.sprites.push(mx, my, za, lat, `halo|${sel?.id === a.id ? 1 : 0}`, sz * 1.3, 0, 1)
         if (models3d && !a.onGround && zoom >= 9.5) modelInstances.push({ id: a.id, lng, lat, alt: a.altM, heading: a.headingDeg ?? 0, pitch: 0, bank: 0, model: a.category === 'A5' ? 'widebody' : a.category === 'A1' ? 'ga_prop' : a.category === 'A7' ? 'heli_light' : 'airliner', affiliation: 'civil', condition: 'normal', selected: sel?.id === a.id, speed: a.speedMps ?? 0 })
-        else this.sprites.push(mx, my, a.altM, lat, `ac|${cls}`, sz, (a.headingDeg ?? 0) - bearing, a.seenS != null && a.seenS > 30 ? 0.5 : 0.95)
+        else this.sprites.push(mx, my, za, lat, `ac|${cls}`, sz, (a.headingDeg ?? 0) - bearing, a.seenS != null && a.seenS > 30 ? 0.5 : 0.95)
         drawn.push({ kind: 'aircraft', id: a.id, lng, lat, alt: a.altM, r: sz * 0.3 })
-        if (labelsOn && zoom >= 8 && (a.military || zoom >= 9)) label(mx, my, a.altM, lng, lat, `${a.callsign ?? a.id}${a.altM ? ` FL${Math.round(a.altM / 30.48)}` : ''}`, a.military ? palette.liveMil : '#9ec7e0', 10, sel?.id === a.id ? -1 : 3)
+        if (labelsOn && zoom >= 8 && (a.military || zoom >= 9)) label(mx, my, za, lng, lat, `${a.callsign ?? a.id}${a.altM ? ` FL${Math.round(a.altM / 30.48)}` : ''}`, a.military ? palette.liveMil : '#9ec7e0', 10, sel?.id === a.id ? -1 : 3)
       }
       if (on.has('live.sea')) for (const v of s.live.vessels) {
         const [lng, lat] = dr(v.lng, v.lat, v.courseDeg, v.speedMps, dt)
