@@ -2,7 +2,7 @@
   "name": "trossops-frontend",
   "private": true,
   "version": "1.0.0",
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "SEE LICENSE IN ../LICENSE",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",

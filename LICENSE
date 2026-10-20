@@ -1,137 +1,65 @@
-Required Notice: Copyright Shafir Khajo (https://trossops.se)
+TrossOps Source-Available Licence (All Rights Reserved)
+Version 1.0, 20 October 2026
 
-TrossOps is licensed under the PolyForm Noncommercial License 1.0.0.
-Free for noncommercial, personal, research, educational and government use; commercial use requires a separate
-licence from the copyright holder. The full terms follow.
+Copyright (c) 2026 Shafir Khajo (https://trossops.se). All rights reserved.
 
-# PolyForm Noncommercial License 1.0.0
+TrossOps, including its source code, data, generated assets, documentation, designs and the hosted service (together
+"the Software"), is proprietary. It is published so that it can be read and evaluated, not so that it can be used.
+Nothing in this repository is open source, and no right is granted except as written below.
 
-<https://polyformproject.org/licenses/noncommercial/1.0.0>
+1. What you may do
+   (a) View and read the Software on the platform where the copyright holder publishes it.
+   (b) An individual may run an unmodified copy on their own computer for up to 30 days, solely to evaluate the
+       Software for their own personal assessment, provided the copy is not shared, deployed, exposed to a network
+       other than the local machine, or used with real operational data.
+   (c) Make the transient copies that the publishing platform's own terms require (for example a platform "fork"
+       button), only to the extent those terms require and for no other purpose.
 
-## Acceptance
+2. What you may not do without the copyright holder's prior written permission
+   Every other act is reserved, whatever its purpose and whether or not it is for profit, including:
+   (a) any use in production, operations, exercises, training, demonstrations, procurement, research or internal
+       business processes, by any person or organisation, including companies, government bodies, armed forces,
+       public authorities, educational and research institutions and charities;
+   (b) copying, modifying, translating, adapting or creating derivative works, including by porting, rewriting or
+       reimplementing substantial parts of its design, layouts or data;
+   (c) distributing, publishing, sublicensing, selling, renting, lending or otherwise making the Software or any
+       part of it available to others, in source or compiled form;
+   (d) hosting, operating or offering the Software, or functionality derived from it, as a service;
+   (e) incorporating any part of the Software into another product, service or dataset;
+   (f) using the Software or any part of it to train, fine-tune, evaluate or benchmark machine-learning models, or
+       as input to automated code generation intended to reproduce it;
+   (g) removing, obscuring or altering this licence or any copyright, attribution or source notice.
 
-In order to get any license under these terms, you must agree
-to them as both strict obligations and conditions to all
-your licenses.
+3. Commercial and organisational licences
+   Licences for any use reserved in section 2 are available only by separate written agreement with the copyright
+   holder. Contact: https://trossops.se.
 
-## Copyright License
+4. Contributions
+   If you submit a contribution (code, data, documentation, issue text or other material), you grant the copyright
+   holder a perpetual, worldwide, irrevocable, royalty-free, transferable licence, with the right to sublicense, to
+   use, modify, distribute and relicense it as part of the Software or otherwise, and you confirm that you have the
+   right to grant it. You receive no rights in the Software in return.
 
-The licensor grants you a copyright license for the
-software to do everything you might do with the software
-that would otherwise infringe the licensor's copyright
-in it for any permitted purpose.  However, you may
-only distribute the software according to [Distribution
-License](#distribution-license) and make changes or new works
-based on the software according to [Changes and New Works
-License](#changes-and-new-works-license).
+5. Third-party material
+   Components, map data and public data feeds used by the Software remain under their own licences and terms (see
+   the README and docs/geospatial/integration-matrix.md). This licence does not change those terms and grants no
+   rights in third-party material.
 
-## Distribution License
+6. Termination
+   Any act outside section 1 terminates every permission under this licence automatically. On termination you must
+   stop using the Software and delete all copies in your possession or control.
 
-The licensor grants you an additional copyright license
-to distribute copies of the software.  Your license
-to distribute covers distributing the software with
-changes and new works permitted by [Changes and New Works
-License](#changes-and-new-works-license).
+7. No warranty; limitation of liability
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. ALL OPERATIONAL CONTENT IS SYNTHETIC. TO
+   THE MAXIMUM EXTENT PERMITTED BY LAW, THE COPYRIGHT HOLDER IS NOT LIABLE FOR ANY CLAIM, DAMAGE OR OTHER LIABILITY
+   ARISING FROM OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
 
-## Notices
+8. Earlier versions
+   Versions of the Software published before this licence (up to and including commit 0d6943a) were offered under
+   the PolyForm Noncommercial License 1.0.0. Copies of those versions obtained under those terms remain subject to
+   them. This licence applies to this version and every later version.
 
-You must ensure that anyone who gets a copy of any part of
-the software from you also gets a copy of these terms or the
-URL for them above, as well as copies of any plain-text lines
-beginning with `Required Notice:` that the licensor provided
-with the software.  For example:
-
-> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
-
-## Changes and New Works License
-
-The licensor grants you an additional copyright license to
-make changes and new works based on the software for any
-permitted purpose.
-
-## Patent License
-
-The licensor grants you a patent license for the software that
-covers patent claims the licensor can license, or becomes able
-to license, that you would infringe by using the software.
-
-## Noncommercial Purposes
-
-Any noncommercial purpose is a permitted purpose.
-
-## Personal Uses
-
-Personal use for research, experiment, and testing for
-the benefit of public knowledge, personal study, private
-entertainment, hobby projects, amateur pursuits, or religious
-observance, without any anticipated commercial application,
-is use for a permitted purpose.
-
-## Noncommercial Organizations
-
-Use by any charitable organization, educational institution,
-public research organization, public safety or health
-organization, environmental protection organization,
-or government institution is use for a permitted purpose
-regardless of the source of funding or obligations resulting
-from the funding.
-
-## Fair Use
-
-You may have "fair use" rights for the software under the
-law. These terms do not limit them.
-
-## No Other Rights
-
-These terms do not allow you to sublicense or transfer any of
-your licenses to anyone else, or prevent the licensor from
-granting licenses to anyone else.  These terms do not imply
-any other licenses.
-
-## Patent Defense
-
-If you make any written claim that the software infringes or
-contributes to infringement of any patent, your patent license
-for the software granted under these terms ends immediately. If
-your company makes such a claim, your patent license ends
-immediately for work on behalf of your company.
-
-## Violations
-
-The first time you are notified in writing that you have
-violated any of these terms, or done anything with the software
-not covered by your licenses, your licenses can nonetheless
-continue if you come into full compliance with these terms,
-and take practical steps to correct past violations, within
-32 days of receiving notice.  Otherwise, all your licenses
-end immediately.
-
-## No Liability
-
-***As far as the law allows, the software comes as is, without
-any warranty or condition, and the licensor will not be liable
-to you for any damages arising out of these terms or the use
-or nature of the software, under any kind of legal claim.***
-
-## Definitions
-
-The **licensor** is the individual or entity offering these
-terms, and the **software** is the software the licensor makes
-available under these terms.
-
-**You** refers to the individual or entity agreeing to these
-terms.
-
-**Your company** is any legal entity, sole proprietorship,
-or other kind of organization that you work for, plus all
-organizations that have control over, are under the control of,
-or are under common control with that organization.  **Control**
-means ownership of substantially all the assets of an entity,
-or the power to direct its management and policies by vote,
-contract, or otherwise.  Control can be direct or indirect.
-
-**Your licenses** are all the licenses granted to you for the
-software under these terms.
-
-**Use** means anything you do with the software requiring one
-of your licenses.
+9. Governing law
+   This licence is governed by the laws of Sweden. Disputes are subject to the exclusive jurisdiction of the
+   Swedish courts.
