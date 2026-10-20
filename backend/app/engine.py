@@ -521,7 +521,7 @@ class Engine:
                 "events": [ev_ for ev_ in self.events if ev_["assetId"] == entity_id], "worldRevision": self.revision, "atS": round(ev.t, 1),
                 "ruleTrace": [tr for tr in ev.fx.traces if tr.get("subject") == entity_id], "fusion": ev.fx.fusion.get(entity_id),
                 "deception": ev.fx.deception.get(entity_id), "plan": self.plans[entity_id]["plan"] if entity_id in self.plans else None,
-                "layout": self.world.layouts[entity_id].to_api() if entity_id in self.world.layouts else None,
+                "layout": self.world.layouts[entity_id].to_api(summary=True) if entity_id in self.world.layouts else None,
                 "based": [x.node.id for x in self.world.entities.values() if x.node.site == entity_id and x.node.kind not in ("facility", "infrastructure")][:400]}
 
     def formation_detail(self, fid: str, ev: Evaluation) -> dict:

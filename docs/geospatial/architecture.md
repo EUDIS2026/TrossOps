@@ -55,7 +55,13 @@ rasterises road networks into cells. The world uses it as follows (`orbat.py`):
   aprons, shelters, buildings) must be clear of every road in `roads.bin`, and the fenced footprint must avoid water
   and national roads; naval bases also need their berths in water and a channel in navigable sea. The
   nearest fitting position is searched (axis turned if needed), preferring ground free of every road, then free of
-  graph roads, then merely dry.
+  graph roads, then merely dry. Placements are cached in `world_routes.json.gz`; an airbase's cache key carries
+  `sitegen.AIRBASE_LAYOUT`, so bumping it after changing the airbase's built surfaces re-places only the airbases.
+- **Airbase layout** (`sitegen.airbase`): a local frame with u along the runway and v to its right. Airside
+  (parallel taxiway A, apron, maintenance, dispersal loops) is on +v; the QRA compound, navaids, helipads, the reserve
+  road strip and the weapons storage area are on −v; the cantonment is by the main gate at −u. The taxiways form a
+  `TaxiNet` graph. `taxi_out` and `taxi_in` are shortest paths on it (runway edges cost ×6, so back-taxiing is a last
+  resort), and every parking spot carries its graph node.
 - **Parked and dispersed ground units** (`on_ground`, `in_field`): snapped to the nearest dry, road-free point.
   Columns and patrol loops stay on the road network; ground paths cross water only on roads (bridges, ferries).
 - **Ships** (`at_sea`): harbour positions need sea with ~150 m of water around them; ships leave through their base's

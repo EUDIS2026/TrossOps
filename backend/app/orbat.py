@@ -572,7 +572,8 @@ class Orbat:
     def _layout(self, s: SiteDef, c: tuple[float, float], axis: float) -> sitegen.SiteLayout:
         seed = int(hashlib.md5(s.id.encode()).hexdigest()[:8], 16)
         if s.kind == "airbase":
-            return sitegen.airbase(s.id, c, axis, seed, shelters_per_hub=12 if s.id != "airbase-ost" else 6)
+            heliport = s.id == "airbase-ost"
+            return sitegen.airbase(s.id, c, axis, seed, shelters_per_hub=6 if heliport else 12, helipads=8 if heliport else 0)
         if s.kind == "navbase":
             return sitegen.navbase(s.id, c, axis, seed, piers=4 if s.id == "navbase-syd" else 3)
         if s.kind == "garrison":
@@ -623,7 +624,8 @@ class Orbat:
                 if best:
                     return [best[1], (best[2], 0.0)]
             return [c0, (s.axis, 0.0)]
-        got = self.cache.get(RouteCache.key("site", s.id, s.kind, c0, s.axis), compute)
+        rev = ("layout", sitegen.AIRBASE_LAYOUT) if s.kind == "airbase" else ()  # a new airbase layout is placed afresh
+        got = self.cache.get(RouteCache.key("site", s.id, s.kind, c0, s.axis, *rev), compute)
         return got[0], got[1][0]
 
     def _sites(self) -> None:
@@ -639,7 +641,8 @@ class Orbat:
     # -- air -------------------------------------------------------------------------------------------------------
     def _sortie(self, base: str, spot: sitegen.Spot, mission: list[tuple[float, float]], cruise_alt: float, cruise_mps: float, laps: int = 1,
                 climb_alt: float = 600.0) -> Path:
-        """Shelter → taxi → take-off roll → climb → mission pattern × laps → approach → landing → taxi back."""
+        """Shelter → taxi → take-off roll → climb → mission pattern × laps → approach → landing → roll-out onto the
+        rapid exit nearer the spot → taxi back."""
         lay = self.layouts[base]
         rw = lay.runway
         assert rw
@@ -680,9 +683,12 @@ class Orbat:
         add(faf, 600.0, 85.0)
         add(geo.destination(start, axis, 300), 15.0, 75.0)
         add(geo.destination(start, axis, 360), None, 70.0)
-        add(geo.destination(start, axis, 1100), None, 45.0)
-        add(geo.destination(start, axis, 1900), None, 20.0)
-        for p in sitegen.taxi_in(lay, spot):
+        in_taxi = sitegen.taxi_in(lay, spot)
+        exit_m = geo.haversine_m(start, in_taxi[0])
+        for frac, v in ((0.55, 45.0), (0.85, 22.0)):
+            add(geo.destination(start, axis, 360 + (exit_m - 360) * frac), None, v)
+        add(in_taxi[0], None, 14.0)
+        for p in in_taxi[1:]:
             add(p, None, 8.0)
         return Path(verts, speeds)
 
@@ -740,10 +746,10 @@ class Orbat:
                             cap = caps[pair % len(caps)]
                             path = self._sortie(base, spot, cap, 7000 + 500 * (pair % 3), 220.0, laps=2)
                             node.motion = MotionSpec("path", path=path, start_s=300 + pair * 1700, offset_s=10.0 if tail % 2 == 0 else 0.0, hold_s=2400,
-                                                     mode="loop", airborne=True, fuel_start=100, fuel_burn_per_km=0.055)
+                                                     mode="loop", airborne=True, fuel_start=100, fuel_burn_per_km=0.055, end_heading=spot.heading)
                         elif pair == 6:
                             node.motion = MotionSpec("path", path=self._circuit(base, spot), start_s=120 + k * 45, hold_s=420, mode="loop", airborne=True,
-                                                     fuel_start=100, fuel_burn_per_km=0.08)
+                                                     fuel_start=100, fuel_burn_per_km=0.08, end_heading=spot.heading)
                         else:
                             node.motion = MotionSpec("static", pos=(spot.lng, spot.lat, None), heading=spot.heading, fuel_start=round(self.rng.uniform(60, 100)))
                         self.add(node)
@@ -759,7 +765,7 @@ class Orbat:
             if k < 3:
                 mission = [self.sites[s] for s in routes_tr[k]]
                 node.motion = MotionSpec("path", path=self._sortie("airbase-mitt", spot, mission, 5500, 150.0), start_s=600 + k * 2900, hold_s=3600,
-                                         mode="loop", airborne=True, fuel_start=100, fuel_burn_per_km=0.03)
+                                         mode="loop", airborne=True, fuel_start=100, fuel_burn_per_km=0.03, end_heading=spot.heading)
             else:
                 node.motion = MotionSpec("static", pos=(spot.lng, spot.lat, None), heading=spot.heading, fuel_start=90)
             self.add(node)
@@ -771,7 +777,7 @@ class Orbat:
                         label, plat, model, "airbase-mitt", "03", ["isr", "air_picture"] + (["sigint"] if k == 2 else []), crew=6, range_km=450 if model == "aew" else 300)
             if k != 1:
                 node.motion = MotionSpec("path", path=self._sortie("airbase-mitt", spot, orbit, alt, 190.0, laps=3), start_s=200 + k * 3000, hold_s=5400,
-                                         mode="loop", airborne=True, fuel_start=100, fuel_burn_per_km=0.02)
+                                         mode="loop", airborne=True, fuel_start=100, fuel_burn_per_km=0.02, end_heading=spot.heading)
             else:
                 node.motion = MotionSpec("static", pos=(spot.lng, spot.lat, None), heading=spot.heading, fuel_start=100)
             self.add(node)
@@ -791,7 +797,7 @@ class Orbat:
             for model, count in mix:
                 for _ in range(count):
                     n += 1
-                    spot = self.spot(base, "apron", "shelter")
+                    spot = self.spot(base, "helipad", "apron", "shelter")
                     sidc = {"heli_medium": "SFAPMHU-----", "heli_utility": "SFAPMHU-----", "heli_light": "SFAPMHH-----"}[model]
                     plat = {"heli_medium": "Medium transport helicopter", "heli_utility": "Utility helicopter", "heli_light": "Light helicopter"}[model]
                     node = Node(f"{hid}-{n:02d}", f"{hlabel.split(' ')[-1]} {n:02d}", "helicopter", "air", "air.rotary", sidc, "own", f"fm-{hid}", None, f"H{n}",
@@ -832,7 +838,7 @@ class Orbat:
                                  MotionSpec("path", path=bowser, route_id=f"r-bowser-{s.id}", start_s=k * 340, hold_s=420, mode="pingpong"))
                 n.site = s.id
                 n.capabilities = ["fuel", "supply"]
-            ring = [(p[0], p[1]) for p in lay.footprint]
+            ring = [(p[0], p[1]) for p in lay.routes.get("perimeter", lay.footprint)]
             patrol = self.shared_route(f"r-perimeter-{s.id}", densify(ring, 60), 9.0)
             n = self.vehicle(f"{s.id}-sec1", f"{s.label} security patrol", "truck", fid, self.region_of(self.sites[s.id]),
                              MotionSpec("path", path=patrol, route_id=f"r-perimeter-{s.id}", start_s=60, mode="loop"))

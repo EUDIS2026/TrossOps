@@ -119,6 +119,7 @@ class MotionSpec:
     fuel_start: float | None = None  # % at the start of each cycle (refuelled at the end vertex)
     fuel_burn_per_km: float = 0.0
     trim: tuple[float, float] = (0.0, 0.0)
+    end_heading: float | None = None  # heading while holding at the path end (a parked aircraft faces out of its shelter)
 
     def to_api(self) -> dict:
         if self.kind == "static" or self.path is None:
@@ -128,6 +129,8 @@ class MotionSpec:
                "airborne": self.airborne, "fuelStart": self.fuel_start, "fuelBurnPerKm": self.fuel_burn_per_km}
         if self.trim != (0.0, 0.0):
             out["trim"] = [round(self.trim[0], 1), round(self.trim[1], 1)]
+        if self.end_heading is not None:
+            out["endHeading"] = round(self.end_heading, 1)
         if self.route_id:
             out["routeId"] = self.route_id
         else:
@@ -213,6 +216,8 @@ def state_at(m: MotionSpec, t: float) -> State:
         if direction < 0:
             a, b = b, a
     heading = geo.bearing_deg(a[:2], b[:2]) if geo.haversine_m(a[:2], b[:2]) > 0.01 else 0.0
+    if m.end_heading is not None and phase == "holding" and direction > 0:
+        heading = m.end_heading
     pitch = bank = 0.0
     if m.airborne and alt is not None and v > 0:
         if a[2] is not None and b[2] is not None:

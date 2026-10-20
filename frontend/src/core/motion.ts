@@ -8,7 +8,7 @@ export interface MotionApi {
   pos?: Vertex; heading?: number
   routeId?: string; path?: Vertex[]; speeds?: number[]
   startS?: number; offsetS?: number; holdS?: number; mode?: 'loop' | 'pingpong' | 'once'; airborne?: boolean
-  fuelStart?: number | null; fuelBurnPerKm?: number; trim?: [number, number]
+  fuelStart?: number | null; fuelBurnPerKm?: number; trim?: [number, number]; endHeading?: number
 }
 export interface Pose { lng: number; lat: number; alt: number | null; heading: number; pitch: number; bank: number; speed: number; phase: Phase; fuel: number | null }
 export type Phase = 'static' | 'waiting' | 'moving' | 'holding' | 'returning' | 'done'
@@ -96,7 +96,7 @@ export interface Motion {
   kind: 'static' | 'path'
   pos: Vertex | null; heading: number
   path: Path | null; startS: number; offsetS: number; holdS: number; mode: 'loop' | 'pingpong' | 'once'; airborne: boolean
-  fuelStart: number | null; fuelBurnPerKm: number; trim: [number, number]
+  fuelStart: number | null; fuelBurnPerKm: number; trim: [number, number]; endHeading: number | null
 }
 
 export function motionFromApi(m: MotionApi, routes: Map<string, Path>): Motion {
@@ -105,7 +105,7 @@ export function motionFromApi(m: MotionApi, routes: Map<string, Path>): Motion {
   return {
     kind: path ? 'path' : 'static', pos: m.pos ?? (path ? [path.lng[0], path.lat[0], path.alt[0]] : null), heading: m.heading ?? 0, path,
     startS: m.startS ?? 0, offsetS: m.offsetS ?? 0, holdS: m.holdS ?? 0, mode: m.mode ?? 'loop', airborne: !!m.airborne,
-    fuelStart: m.fuelStart ?? null, fuelBurnPerKm: m.fuelBurnPerKm ?? 0, trim: m.trim ?? [0, 0],
+    fuelStart: m.fuelStart ?? null, fuelBurnPerKm: m.fuelBurnPerKm ?? 0, trim: m.trim ?? [0, 0], endHeading: m.endHeading ?? null,
   }
 }
 
@@ -163,7 +163,8 @@ export function poseAt(m: Motion, t: number, out?: Pose): Pose {
       tmpB[0] = p.lng[ib]; tmpB[1] = p.lat[ib]; tmpB[2] = p.alt[ib] ?? NaN
     } else { tmpA.set(tmpP); tmpB.set(tmpP) }
   }
-  const heading = haversine(tmpA[0], tmpA[1], tmpB[0], tmpB[1]) > 0.01 ? bearing(tmpA[0], tmpA[1], tmpB[0], tmpB[1]) : 0
+  let heading = haversine(tmpA[0], tmpA[1], tmpB[0], tmpB[1]) > 0.01 ? bearing(tmpA[0], tmpA[1], tmpB[0], tmpB[1]) : 0
+  if (m.endHeading !== null && phase === 'holding' && dir > 0) heading = m.endHeading
   let pitch = 0, bank = 0
   if (m.airborne && alt !== null && v > 0) {
     if (!Number.isNaN(tmpA[2]) && !Number.isNaN(tmpB[2])) pitch = Math.atan2(tmpB[2] - tmpA[2], 2 * w) / D2R
