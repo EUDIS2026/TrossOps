@@ -21,6 +21,7 @@ export type ModelKey =
   | 'corvette' | 'patrol_ship' | 'mcm' | 'submarine' | 'cb90' | 'support_ship'
   | 'cargo_ship' | 'tanker' | 'container_ship' | 'ferry' | 'fishing' | 'tug' | 'icebreaker' | 'coast_guard' | 'sailboat'
   | 'hangar' | 'shelter' | 'tower' | 'fuel_tank' | 'radar_dome' | 'radar_rotating' | 'barracks' | 'warehouse' | 'bunker'
+  | 'guard_tower' | 'hush_house' | 'ils_array' | 'mast'
 
 /** Overall dimensions in metres (length along Y, width along X, height along Z), including rotors/masts. */
 export interface ModelSpec { key: ModelKey; lengthM: number; widthM: number; heightM: number; domain: 'air' | 'rotor' | 'ground' | 'sea' | 'site' }
@@ -86,6 +87,10 @@ export const MODEL_SPECS: Record<ModelKey, ModelSpec> = {
   barracks: S('barracks', 40.0, 13.0, 9.0, 'site'),
   warehouse: S('warehouse', 60.0, 30.0, 12.0, 'site'),
   bunker: S('bunker', 20.0, 15.0, 4.6, 'site'),
+  guard_tower: S('guard_tower', 4.0, 4.0, 12.0, 'site'),
+  hush_house: S('hush_house', 40.0, 22.0, 12.0, 'site'),
+  ils_array: S('ils_array', 4.0, 36.0, 4.0, 'site'),
+  mast: S('mast', 3.0, 3.0, 14.0, 'site'),
 }
 
 export const MODEL_KEYS = Object.keys(MODEL_SPECS) as ModelKey[]

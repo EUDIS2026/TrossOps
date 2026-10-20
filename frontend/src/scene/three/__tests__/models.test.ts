@@ -11,7 +11,7 @@ const tris = (m: BuiltModel) => [m.geometry, ...m.parts.map(p => p.geometry)].re
 
 describe('procedural model library', () => {
   it('covers every key with a spec', () => {
-    expect(MODEL_KEYS.length).toBe(53)
+    expect(MODEL_KEYS.length).toBe(57)
     for (const k of MODEL_KEYS) expect(MODEL_SPECS[k].key).toBe(k)
   })
 

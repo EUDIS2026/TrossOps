@@ -15,6 +15,7 @@ import * as THREE from 'three'
 import type { CustomLayerInterface, CustomRenderMethodInput, Map as MlMap } from 'maplibre-gl'
 import type { Affiliation, Condition } from '../contracts/types'
 import { buildModel, MODEL_SPECS, type ModelKey } from './three/models'
+import { SITE_PROP_MODELS } from './overlays'
 
 export interface ModelInstance { id: string; lng: number; lat: number; alt: number | null; heading: number; pitch: number; bank: number; model: string; affiliation: Affiliation; condition: Condition; selected: boolean; speed: number }
 
@@ -22,7 +23,7 @@ const EARTH = 40_075_016.686
 const TINT: Record<string, [number, number, number]> = { own: [0.78, 0.9, 1.0], allied: [0.7, 1.0, 0.8], civil: [0.92, 0.9, 0.95], unknown: [1.0, 1.0, 0.62], hostile_suspected: [1.0, 0.62, 0.6], prop: [0.86, 0.88, 0.9] }
 const AIRBORNE = new Set(['fighter', 'transport', 'aew', 'sigint', 'trainer', 'uav', 'airliner', 'widebody', 'bizjet', 'ga_prop', 'heli_medium', 'heli_utility', 'heli_light', 'unknown_air'])
 const ALIAS: Record<string, ModelKey> = { unknown_air: 'fighter', unknown_sea: 'patrol_ship', personnel: 'command_post', cb90: 'cb90' }
-const PROP_MODELS = new Set(['shelter', 'hangar', 'tower', 'radar_dome', 'radar_rotating', 'bunker', 'warehouse', 'barracks'])
+const PROP_MODELS = new Set(SITE_PROP_MODELS)
 
 /** Zoom from which a domain switches from symbol to model (models are enlarged to stay legible below real scale). */
 export function modelZoomFor(model: string): number {
@@ -72,6 +73,7 @@ export class ModelLayer implements CustomLayerInterface {
   enabled = false
   private map: MlMap | null = null
   private renderer: THREE.WebGLRenderer | null = null
+  private gl: WebGL2RenderingContext | null = null
   private scene = new THREE.Scene()
   private camera = new THREE.Camera()
   private material: THREE.ShaderMaterial
@@ -100,6 +102,9 @@ export class ModelLayer implements CustomLayerInterface {
 
   onAdd(map: MlMap, gl: WebGL2RenderingContext) {
     this.map = map
+    this.statKey = ''
+    if (this.renderer && this.gl === gl) return // re-added after a style switch: keep the renderer and its programs
+    this.gl = gl
     this.renderer = new THREE.WebGLRenderer({ canvas: map.getCanvas(), context: gl, antialias: true })
     this.renderer.autoClear = false
     this.scene.matrixWorldAutoUpdate = false
@@ -107,7 +112,7 @@ export class ModelLayer implements CustomLayerInterface {
     this.statKey = ''
   }
 
-  onRemove() { this.renderer?.dispose(); this.renderer = null; this.map = null }
+  onRemove() { this.renderer?.dispose(); this.renderer = null; this.gl = null; this.map = null }
 
   setInstances(list: ModelInstance[], zoom: number) {
     // cheap fingerprint: a parked fleet produces the same list every frame and needs no repaint

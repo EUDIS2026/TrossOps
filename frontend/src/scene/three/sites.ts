@@ -153,6 +153,74 @@ function bunker(): BuiltParts {
   return { geometry: k.build(), parts: [] }
 }
 
-export const SITE_BUILDERS: Record<Extract<ModelKey, 'hangar' | 'shelter' | 'tower' | 'fuel_tank' | 'radar_dome' | 'radar_rotating' | 'barracks' | 'warehouse' | 'bunker'>, () => BuiltParts> = {
+function guardTower(): BuiltParts {
+  const k = new Kit()
+  const st = grey(0.55)
+  const legs: [number, number][] = [[1, 1], [1, -1], [-1, -1], [-1, 1]]
+  // four splayed legs with two levels of cross bracing, glazed cab, overhanging roof, ladder, antenna
+  for (const [sx, sy] of legs) k.strut(st, [1.75 * sx, 1.75 * sy, 0], [1.35 * sx, 1.35 * sy, 8], 0.22)
+  for (const z of [2.7, 5.4]) {
+    const w = 1.75 - (0.4 * z) / 8
+    for (let i = 0; i < 4; i++) { const [ax, ay] = legs[i], [bx, by] = legs[(i + 1) % 4]; k.strut(st, [w * ax, w * ay, z], [w * bx, w * by, z], 0.12) }
+  }
+  k.box(grey(0.6), [3.4, 3.4, 0.25], [0, 0, 8.1])
+  k.stack((i) => (i === 1 ? COL.glass : grey(0.78)), [[-1.6, -1.6], [1.6, -1.6], [1.6, 1.6], [-1.6, 1.6]], [{ z: 8.2 }, { z: 9.1 }, { z: 10.3 }, { z: 10.6 }])
+  k.box(grey(0.45), [4, 4, 0.3], [0, 0, 10.75])
+  k.strut(grey(0.5), [1.9, 0, 0], [1.6, 0, 8.1], 0.5, 0.08)
+  k.cyl(grey(0.6), 0.06, 1.2, 'z', [1.2, 1.2, 11.5], 6)
+  k.box(grey(0.7), [0.5, 0.5, 0.3], [-1.2, -1.2, 11.05])
+  return { geometry: k.build(), parts: [] }
+}
+
+function hushHouse(): BuiltParts {
+  const k = new Kit()
+  const wall = grey(0.74)
+  // enclosed engine test cell: aircraft hall (door at −Y), augmenter tube and vertical exhaust stack at +Y
+  k.stack((i, j) => (i === 0 && j === 0 ? grey(0.5) : wall), [[-11, -20], [11, -20], [11, 6], [-11, 6]], [{ z: 0 }, { z: 7.5 }, { z: 9.5 }])
+  k.extrude(grey(0.62), [[-11.2, 9.4], [11.2, 9.4], [6, 10.6], [-6, 10.6]], 'y', -20.3, 6.3)
+  k.box(grey(0.5), [16, 0.3, 7.5], [0, -20.15, 3.75])
+  for (let i = -3; i <= 3; i++) k.box(grey(0.42), [0.2, 0.4, 7.5], [i * 2.3, -20.2, 3.75])
+  for (const y of [-14, -8, -2]) k.box(grey(0.55), [14, 1.2, 1.0], [0, y, 11.0])
+  k.cyl(grey(0.66), 3.2, 12, 'y', [0, 12, 4.2], 14)
+  for (const y of [8.5, 12, 15.5]) k.cyl(grey(0.56), 3.35, 0.4, 'y', [0, y, 4.2], 14)
+  k.box(grey(0.7), [8, 4, 12], [0, 18, 6])
+  k.box(COL.darker, [6.4, 3.4, 0.1], [0, 18, 12.02])
+  return { geometry: k.build(), parts: [] }
+}
+
+function ilsArray(): BuiltParts {
+  const k = new Kit()
+  const st = grey(0.62)
+  // localizer: a 36 m row of log-periodic dipole antennas on a low frame, booms pointing down the runway (+Y)
+  for (const z of [1.2, 3.0]) k.box(st, [36, 0.2, 0.2], [0, 0, z])
+  for (let x = -18; x <= 18.01; x += 6) { k.box(st, [0.25, 0.25, 3.2], [x, 0, 1.6]); k.box(COL.concrete, [0.8, 0.8, 0.2], [x, 0, 0.1]) }
+  for (let i = 0; i < 13; i++) {
+    const x = -17.4 + i * 2.9
+    k.box(grey(0.8), [0.12, 4, 0.12], [x, 0, 3.3])
+    for (const y of [-1.4, -0.2, 1.0]) k.box(grey(0.75), [1.6 - y * 0.35, 0.08, 0.08], [x, y, 3.3])
+    k.box(grey(0.4), [0.2, 0.2, 0.5], [x, 1.9, 3.7])
+  }
+  return { geometry: k.build(), parts: [] }
+}
+
+function mast(): BuiltParts {
+  const k = new Kit()
+  const st = grey(0.6)
+  const legs: [number, number][] = [[1, 1], [1, -1], [-1, -1], [-1, 1]]
+  // tapering lattice mast: glideslope, TACAN or weather instruments at the top (height scaled per site)
+  for (const [sx, sy] of legs) k.strut(st, [1.35 * sx, 1.35 * sy, 0], [0.45 * sx, 0.45 * sy, 12.5], 0.14)
+  for (const z of [2.5, 5, 7.5, 10]) {
+    const w = 1.35 - (0.9 * z) / 12.5
+    for (let i = 0; i < 4; i++) { const [ax, ay] = legs[i], [bx, by] = legs[(i + 1) % 4]; k.strut(st, [w * ax, w * ay, z], [w * bx, w * by, z], 0.08) }
+  }
+  k.box(grey(0.55), [1.6, 1.6, 0.15], [0, 0, 12.55])
+  k.box(grey(0.82), [0.9, 0.6, 0.8], [0, 0.6, 13.0])
+  k.cyl(grey(0.7), 0.06, 1.4, 'z', [-0.5, -0.5, 13.3], 6)
+  for (const [x, y] of [[1.4, 0], [-1.4, 0]] as const) k.box(COL.concrete, [0.6, 0.6, 0.3], [x, y, 0.15])
+  return { geometry: k.build(), parts: [] }
+}
+
+export const SITE_BUILDERS: Record<Extract<ModelKey, 'hangar' | 'shelter' | 'tower' | 'fuel_tank' | 'radar_dome' | 'radar_rotating' | 'barracks' | 'warehouse' | 'bunker' | 'guard_tower' | 'hush_house' | 'ils_array' | 'mast'>, () => BuiltParts> = {
   hangar, shelter, tower, fuel_tank: fuelTank, radar_dome: radarDome, radar_rotating: radarRotating, barracks, warehouse, bunker,
+  guard_tower: guardTower, hush_house: hushHouse, ils_array: ilsArray, mast,
 }

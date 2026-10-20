@@ -6,6 +6,9 @@ import { eventMarker, palette } from './symbols'
 
 export const empty = (): GeoJSON.FeatureCollection => ({ type: 'FeatureCollection', features: [] })
 
+/** Layout features drawn as procedural 3D props (models3d.ts) rather than extrusions. */
+export const SITE_PROP_MODELS = ['shelter', 'hangar', 'tower', 'radar_dome', 'radar_rotating', 'bunker', 'warehouse', 'barracks', 'guard_tower', 'hush_house', 'ils_array', 'mast']
+
 const SOURCES = ['areas', 'cables', 'predictions', 'prediction-rings', 'plans', 'route-preview', 'trails', 'interventions', 'reports', 'police', 'warnings',
   'stations', 'wind', 'analysis', 'site-detail', 'site-points', 'night', 'ranges', 'crisis', 'fires', 'traffic']
 
@@ -29,10 +32,11 @@ export const OVERLAY_LAYERS: Record<string, string[]> = {
   // 'picture.labels' (unit, site and live-traffic labels) is drawn by the GPU TextLayer, read per frame
 }
 export const DETAIL_LAYERS: Record<string, string[]> = {
-  'detail.infra': ['site-footprint', 'site-surface', 'site-markings', 'site-centerline', 'site-buildings', 'site-buildings-flat', 'site-runway-label', 'site-taxi-lines'],
-  'detail.logistics': ['site-logistics', 'site-logistics-flat', 'site-roads', 'site-fill-label'],
-  'detail.defence': ['site-fence', 'site-gates'],
-  'detail.personnel': ['site-personnel', 'site-personnel-flat'],
+  'detail.infra': ['site-footprint', 'site-shoulders', 'site-surface', 'site-markings', 'site-centerline', 'site-runway-edges', 'site-yellow', 'site-hold-dash', 'site-arrestor',
+    'site-compass', 'site-buildings', 'site-buildings-flat', 'site-runway-label', 'site-taxi-lines', 'site-lights-glow', 'site-lights', 'site-taxi-signs', 'site-stand-labels', 'site-names'],
+  'detail.logistics': ['site-logistics', 'site-logistics-flat', 'site-roads', 'site-fuel-line', 'site-hydrants', 'site-fill-label'],
+  'detail.defence': ['site-patrol', 'site-fence', 'site-gates', 'site-defence', 'site-defence-flat'],
+  'detail.personnel': ['site-ground', 'site-personnel', 'site-personnel-flat'],
 }
 
 export function addOverlays(m: MlMap) {
@@ -78,30 +82,59 @@ export function addOverlays(m: MlMap) {
   add({ id: 'cables-label', type: 'symbol', source: 'cables', minzoom: 6, layout: { 'symbol-placement': 'line', 'text-field': ['get', 'label'], 'text-font': FONT, 'text-size': 10, 'text-offset': [0, -0.8] },
     paint: { 'text-color': '#8fcbe6', 'text-halo-color': '#071018', 'text-halo-width': 1.4 } })
   // site detail (synthetic layouts)
+  const cls = (...names: string[]) => ['in', ['get', 'cls'], ['literal', names]]
+  const metres = (w14: number) => ['interpolate', ['exponential', 2], ['zoom'], 14, w14, 18, w14 * 16] // a painted line of fixed ground width
   const detailColor = ['match', ['get', 'cls'], 'runway', '#3b434c', 'taxiway', '#30373f', 'apron', '#323940', 'dispersal', '#262c32', 'quay', '#343b42', 'pier', '#3f474f', 'pontoon', '#3a4148',
+    'blast_pad', '#2c3137', 'arming_pad', '#363c43', 'deice_pad', '#2d3945', 'runup_pad', '#353b41', 'compass_pad', '#383f46', 'helipad', '#3c444c',
     'motorpool', '#272d33', 'bund', '#2b2a25', 'footprint', 'rgba(60,70,80,0.18)', '#2c333a']
   add({ id: 'site-footprint', type: 'fill', source: 'site-detail', minzoom: 11, filter: ['==', ['get', 'cls'], 'footprint'], paint: { 'fill-color': 'rgba(70,82,95,0.16)', 'fill-outline-color': 'rgba(150,170,190,0.3)' } })
-  add({ id: 'site-surface', type: 'fill', source: 'site-detail', minzoom: 11, filter: ['in', ['get', 'cls'], ['literal', ['runway', 'taxiway', 'apron', 'dispersal', 'quay', 'pier', 'pontoon']]], paint: { 'fill-color': detailColor as never, 'fill-opacity': 0.95 } })
+  add({ id: 'site-ground', type: 'fill', source: 'site-detail', minzoom: 12, filter: cls('sports_field', 'parking') as never, paint: { 'fill-color': ['match', ['get', 'cls'], 'sports_field', '#22362a', '#2b3137'], 'fill-outline-color': 'rgba(150,170,190,0.25)' } })
+  add({ id: 'site-shoulders', type: 'fill', source: 'site-detail', minzoom: 12, filter: cls('runway_shoulder', 'taxiway_shoulder') as never, paint: { 'fill-color': '#272c32', 'fill-opacity': 0.95 } })
+  add({ id: 'site-surface', type: 'fill', source: 'site-detail', minzoom: 11, filter: cls('runway', 'taxiway', 'apron', 'dispersal', 'quay', 'pier', 'pontoon', 'blast_pad', 'arming_pad', 'deice_pad', 'runup_pad', 'compass_pad', 'helipad') as never,
+    paint: { 'fill-color': detailColor as never, 'fill-opacity': 0.95 } })
   add({ id: 'site-markings', type: 'fill', source: 'site-detail', minzoom: 14, filter: ['==', ['get', 'cls'], 'runway_marking'], paint: { 'fill-color': '#d9dee3', 'fill-opacity': 0.85 } })
   add({ id: 'site-centerline', type: 'line', source: 'site-detail', minzoom: 13, filter: ['==', ['get', 'cls'], 'runway_centerline'], paint: { 'line-color': '#d9dee3', 'line-width': 1.2, 'line-dasharray': [6, 6], 'line-opacity': 0.8 } })
+  add({ id: 'site-runway-edges', type: 'line', source: 'site-detail', minzoom: 14, filter: ['==', ['get', 'cls'], 'runway_edge'], paint: { 'line-color': '#d9dee3', 'line-width': metres(0.25) as never, 'line-opacity': 0.75 } })
   add({ id: 'site-taxi-lines', type: 'line', source: 'site-detail', minzoom: 13, filter: ['==', ['get', 'cls'], 'taxiway_line'], paint: { 'line-color': '#c9b14a', 'line-width': 1, 'line-opacity': 0.7 } })
+  add({ id: 'site-yellow', type: 'line', source: 'site-detail', minzoom: 14.5, filter: cls('chevron', 'stand_line', 'hold_line') as never, paint: { 'line-color': '#e2c443', 'line-width': metres(0.2) as never, 'line-opacity': 0.9 } })
+  add({ id: 'site-hold-dash', type: 'line', source: 'site-detail', minzoom: 14.5, filter: ['==', ['get', 'cls'], 'hold_line_dash'], paint: { 'line-color': '#e2c443', 'line-width': metres(0.2) as never, 'line-dasharray': [1.5, 1.2], 'line-opacity': 0.9 } })
+  add({ id: 'site-arrestor', type: 'line', source: 'site-detail', minzoom: 14.5, filter: ['==', ['get', 'cls'], 'arrestor'], paint: { 'line-color': '#f09a3e', 'line-width': 1.4, 'line-dasharray': [1, 1] } })
+  add({ id: 'site-compass', type: 'line', source: 'site-detail', minzoom: 15, filter: ['==', ['get', 'cls'], 'compass_line'], paint: { 'line-color': '#d9dee3', 'line-width': 1, 'line-opacity': 0.8 } })
   add({ id: 'site-roads', type: 'line', source: 'site-detail', minzoom: 12, filter: ['==', ['get', 'cls'], 'base_road'], paint: { 'line-color': '#47505a', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1, 16, 5] } })
+  add({ id: 'site-patrol', type: 'line', source: 'site-detail', minzoom: 13, filter: ['==', ['get', 'cls'], 'patrol_road'], paint: { 'line-color': '#3a424b', 'line-width': ['interpolate', ['linear'], ['zoom'], 13, 1, 16, 3] } })
+  add({ id: 'site-fuel-line', type: 'line', source: 'site-detail', minzoom: 14, filter: ['==', ['get', 'cls'], 'fuel_line'], paint: { 'line-color': '#b8913a', 'line-width': 1.2, 'line-dasharray': [3, 2], 'line-opacity': 0.8 } })
+  add({ id: 'site-hydrants', type: 'circle', source: 'site-detail', minzoom: 15.5, filter: ['==', ['get', 'cls'], 'hydrant'], paint: { 'circle-radius': 2.2, 'circle-color': '#c9a24a', 'circle-stroke-color': '#0a0e12', 'circle-stroke-width': 1 } })
   const extr = (id: string, filter: unknown, color: unknown) => {
-    const props = ['all', filter, ['!', ['in', ['coalesce', ['get', 'model'], ''], ['literal', ['shelter', 'hangar', 'tower', 'radar_dome', 'radar_rotating', 'bunker', 'warehouse', 'barracks']]]]]
+    const props = ['all', filter, ['!', ['in', ['coalesce', ['get', 'model'], ''], ['literal', SITE_PROP_MODELS]]]]
     add({ id, type: 'fill-extrusion', source: 'site-detail', minzoom: 12, filter: props as never, layout: { visibility: 'none' },
       paint: { 'fill-extrusion-color': color as never, 'fill-extrusion-height': ['get', 'height'], 'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.92, 'fill-extrusion-vertical-gradient': true } })
     add({ id: `${id}-flat`, type: 'fill', source: 'site-detail', minzoom: 12, filter: filter as never, paint: { 'fill-color': color as never, 'fill-outline-color': 'rgba(10,12,14,0.6)' } })
   }
-  extr('site-buildings', ['all', ['==', ['get', 'layer'], 'infra'], ['in', ['get', 'cls'], ['literal', ['hangar', 'shelter', 'tower', 'building', 'warehouse', 'radar']]]],
-    ['match', ['get', 'cls'], 'shelter', '#56606a', 'hangar', '#4b545d', 'tower', '#6a737c', 'radar', '#7c8791', '#454e57'])
+  extr('site-buildings', ['all', ['==', ['get', 'layer'], 'infra'], cls('hangar', 'shelter', 'tower', 'building', 'warehouse', 'radar', 'revetment', 'blast_wall', 'navaid')],
+    ['match', ['get', 'cls'], 'shelter', '#56606a', 'hangar', '#4b545d', 'tower', '#6a737c', 'radar', '#7c8791', 'revetment', '#4f5244', 'blast_wall', '#6b737b', 'navaid', '#7c8791', '#454e57'])
   extr('site-logistics', ['all', ['==', ['get', 'layer'], 'logistics'], ['in', ['get', 'cls'], ['literal', ['fuel_tank', 'ammo_bunker', 'warehouse', 'fuel_point']]]],
     ['case', ['==', ['get', 'cls'], 'fuel_tank'], ['interpolate', ['linear'], ['coalesce', ['get', 'fill'], 50], 20, '#c0503d', 50, '#c9a24a', 80, '#62a87c'], ['==', ['get', 'cls'], 'ammo_bunker'], '#6b5d48', '#4f5a52'])
-  extr('site-personnel', ['==', ['get', 'layer'], 'personnel'], '#3f4a63')
+  extr('site-personnel', ['all', ['==', ['get', 'layer'], 'personnel'], ['==', ['geometry-type'], 'Polygon'], ['!', cls('sports_field', 'parking')]], '#3f4a63')
+  extr('site-defence', ['all', ['==', ['get', 'layer'], 'defence'], cls('guard_tower', 'guardhouse', 'ad_position', 'radar')], ['match', ['get', 'cls'], 'ad_position', '#4c5746', '#5a6470'])
   add({ id: 'site-logistics-bund', type: 'line', source: 'site-detail', minzoom: 13, filter: ['in', ['get', 'cls'], ['literal', ['bund', 'motorpool']]], paint: { 'line-color': '#8a7a4a', 'line-width': 1, 'line-dasharray': [2, 2] } })
-  add({ id: 'site-fence', type: 'line', source: 'site-detail', minzoom: 11, filter: ['==', ['get', 'cls'], 'fence'], paint: { 'line-color': '#9aa9b6', 'line-width': 1.2, 'line-dasharray': [1, 2], 'line-opacity': 0.8 } })
+  add({ id: 'site-fence', type: 'line', source: 'site-detail', minzoom: 11, filter: cls('fence', 'inner_fence') as never, paint: { 'line-color': '#9aa9b6', 'line-width': 1.2, 'line-dasharray': [1, 2], 'line-opacity': 0.8 } })
   add({ id: 'site-gates', type: 'circle', source: 'site-detail', minzoom: 13, filter: ['==', ['get', 'cls'], 'gate'], paint: { 'circle-radius': 4, 'circle-color': '#f2b43a', 'circle-stroke-color': '#0a0e12', 'circle-stroke-width': 1.5 } })
-  add({ id: 'site-runway-label', type: 'symbol', source: 'site-detail', minzoom: 13.5, filter: ['==', ['get', 'cls'], 'runway_label'],
+  add({ id: 'site-runway-label', type: 'symbol', source: 'site-detail', minzoom: 13.5, filter: cls('runway_label', 'helipad_label') as never,
     layout: { 'text-field': ['get', 'name'], 'text-font': FONT_BOLD, 'text-size': 16, 'text-rotate': ['get', 'rotation'], 'text-rotation-alignment': 'map', 'text-pitch-alignment': 'map' }, paint: { 'text-color': '#e6ebef' } })
+  // airfield lighting: a soft halo under a sharp point, colour by function
+  const lightColor = ['match', ['get', 'light'], 'edge', '#fff4d6', 'threshold', '#4dff88', 'end', '#ff4a4a', 'approach', '#fff1b8', 'taxi_edge', '#4f86ff',
+    'taxi_center', '#45f08a', 'stopbar', '#ff3030', 'papi_red', '#ff4040', '#ffffff']
+  add({ id: 'site-lights-glow', type: 'circle', source: 'site-detail', minzoom: 13.5, filter: ['==', ['get', 'cls'], 'light'],
+    paint: { 'circle-color': lightColor as never, 'circle-radius': ['interpolate', ['exponential', 2], ['zoom'], 13.5, 2, 18, 10], 'circle-blur': 1, 'circle-opacity': 0.35, 'circle-pitch-alignment': 'map' } })
+  add({ id: 'site-lights', type: 'circle', source: 'site-detail', minzoom: 13.5, filter: ['==', ['get', 'cls'], 'light'],
+    paint: { 'circle-color': lightColor as never, 'circle-radius': ['interpolate', ['exponential', 2], ['zoom'], 13.5, 0.6, 18, 2.6], 'circle-opacity': 0.95, 'circle-pitch-alignment': 'map' } })
+  add({ id: 'site-taxi-signs', type: 'symbol', source: 'site-detail', minzoom: 15, filter: ['==', ['get', 'cls'], 'taxi_sign'],
+    layout: { 'text-field': ['get', 'name'], 'text-font': FONT_BOLD, 'text-size': 11, 'text-allow-overlap': true }, paint: { 'text-color': '#ffd84a', 'text-halo-color': '#0b0d0f', 'text-halo-width': 2 } })
+  add({ id: 'site-stand-labels', type: 'symbol', source: 'site-detail', minzoom: 16, filter: ['==', ['get', 'cls'], 'stand_label'],
+    layout: { 'text-field': ['get', 'name'], 'text-font': FONT_BOLD, 'text-size': 13, 'text-rotate': ['get', 'rotation'], 'text-rotation-alignment': 'map', 'text-pitch-alignment': 'map', 'text-allow-overlap': true },
+    paint: { 'text-color': '#e2c443' } })
+  add({ id: 'site-names', type: 'symbol', source: 'site-detail', minzoom: 16, filter: ['all', ['==', ['geometry-type'], 'Polygon'], cls('hangar', 'building', 'barracks', 'tower', 'warehouse', 'navaid', 'guardhouse', 'sports_field')] as never,
+    layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 10.5, 'text-max-width': 8 }, paint: { 'text-color': '#c8d2db', 'text-halo-color': '#0a0e12', 'text-halo-width': 1.4 } })
   add({ id: 'site-fill-label', type: 'symbol', source: 'site-detail', minzoom: 15, filter: ['==', ['get', 'cls'], 'fuel_tank'],
     layout: { 'text-field': ['concat', ['to-string', ['get', 'fill']], ' %'], 'text-font': FONT_BOLD, 'text-size': 10, 'text-allow-overlap': true }, paint: { 'text-color': '#f4e7c4', 'text-halo-color': '#0a0e12', 'text-halo-width': 1.4 } })
   // picture
