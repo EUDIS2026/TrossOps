@@ -7,5 +7,5 @@
   "regions": ["arn1"],
   "rewrites": [{ "source": "/api/(.*)", "destination": "/api/index" }],
   "headers": [{ "source": "/api/stream", "headers": [{ "key": "Cache-Control", "value": "no-cache, no-transform" }] }],
-  "env": { "TROSSOPS_EPOCH": "hourly", "TROSSOPS_START_S": "600" }
+  "env": { "TROSSOPS_EPOCH": "hourly", "TROSSOPS_START_S": "600", "TROSSOPS_PUBLIC": "1" }
 }

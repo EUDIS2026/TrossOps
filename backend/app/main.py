@@ -82,6 +82,58 @@ class SecurityHeaders:
 
 app.add_middleware(SecurityHeaders)
 
+# Public demo: POSTs that only compute (route options, optimiser) stay open; everything that changes the shared world
+# (reports, acknowledgements, decisions, plans, events, scenario injection) is refused for visitors.
+READ_ONLY_POSTS = {"/api/plan/route", "/api/strategy/optimize"}
+PUBLIC_READ_ONLY = "Read-only public demo: reports, decisions, plans and scenario injection are disabled here. Run TrossOps locally to use them."
+TERRAIN_PER_MIN = 30  # terrain requests per client per minute (each one is a call on the operator's Lantmäteriet account)
+
+
+class PublicDemo:
+    """Pure ASGI (keeps the SSE stream unbuffered). Active only with TROSSOPS_PUBLIC=1. The terrain limit is per
+    serverless instance, so it bounds abuse rather than metering exactly."""
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+        self.hits: dict[str, list[float]] = {}
+
+    @staticmethod
+    def _client(scope) -> str:
+        for k, v in scope.get("headers", []):
+            if k == b"x-forwarded-for":
+                return v.decode("latin-1").split(",")[0].strip()
+        client = scope.get("client")
+        return client[0] if client else "?"
+
+    def _over_limit(self, ip: str) -> bool:
+        now = time.monotonic()
+        recent = [t for t in self.hits.get(ip, []) if now - t < 60.0]
+        if len(recent) >= TERRAIN_PER_MIN:
+            self.hits[ip] = recent
+            return True
+        recent.append(now)
+        self.hits[ip] = recent
+        if len(self.hits) > 10_000:  # bounded memory: forget idle clients
+            self.hits = {k: v for k, v in self.hits.items() if v and now - v[-1] < 60.0}
+        return False
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or not envfile.public_mode():
+            await self.inner(scope, receive, send)
+            return
+        path, method = scope.get("path", ""), scope.get("method", "GET")
+        if method in ("POST", "PUT", "PATCH", "DELETE") and path not in READ_ONLY_POSTS:
+            await JSONResponse({"detail": PUBLIC_READ_ONLY}, status_code=403)(scope, receive, send)
+            return
+        if path.startswith("/api/terrain/") and self._over_limit(self._client(scope)):
+            await JSONResponse({"detail": f"Terrain requests are limited to {TERRAIN_PER_MIN} a minute on the public demo."}, status_code=429,
+                               headers={"Retry-After": "60"})(scope, receive, send)
+            return
+        await self.inner(scope, receive, send)
+
+
+app.add_middleware(PublicDemo)
+
 
 def _loc(err: dict) -> str:
     return ".".join(str(p) for p in err.get("loc", ()) if p not in ("body",)) or "request"
@@ -148,7 +200,8 @@ def get_views(request: Request) -> Response:
     """Static per deployment: served from pre-encoded bytes with an ETag."""
     enc = _views_memo.get(views, lambda: {
         "roles": [r.model_dump() for r in views.ROLES], "layers": [l.model_dump() for l in views.LAYERS], "rules": rules.rule_catalogue(),
-        "channels": [{"id": k, **v} for k, v in CHANNEL_META.items()], "regionScope": views.REGION_SCOPE, "exclusiveGroups": views.EXCLUSIVE_GROUPS})
+        "channels": [{"id": k, **v} for k, v in CHANNEL_META.items()], "regionScope": views.REGION_SCOPE, "exclusiveGroups": views.EXCLUSIVE_GROUPS,
+        "publicDemo": envfile.public_mode()})
     return httpcache.respond(request, enc)
 
 

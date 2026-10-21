@@ -217,6 +217,7 @@ Copy `.env.example` to `backend/.env` (gitignored, loaded at start-up). Real env
 | Variable | Effect |
 |---|---|
 | `TROSSOPS_FEEDS=off` | no network calls; every feed reports `blocked` (tests, offline demos) |
+| `TROSSOPS_PUBLIC=1` | public demo: the API is read-only for visitors (reports, decisions, plans and scenario injection return 403), the terrain proxy is limited to 30 requests a minute per client, real vessels are not named in cable indicators, and the map carries a permanent demo watermark (set on the Vercel deployment) |
 | `TROSSOPS_START_S` | scenario seconds at start (600 gives a populated picture) |
 | `TROSSOPS_CLOCK_SPEED` | scenario speed multiplier (default 1) |
 | `TROSSOPS_EPOCH` | `hourly` (serverless: instances agree on the epoch) or an ISO timestamp |
@@ -372,7 +373,7 @@ WebGL is too slow for the 3D steps.
 
 `vercel.json` builds `frontend/` as the static site and serves the FastAPI backend as one Python function
 (`api/index.py`, 60 s max) in region **`arn1`** (Stockholm). Every push to `main` deploys. `TROSSOPS_EPOCH=hourly`
-and `TROSSOPS_START_S=600` are set in `vercel.json`. Feed keys go in the Vercel project's environment variables.
+`TROSSOPS_START_S=600` and `TROSSOPS_PUBLIC=1` (public demo mode) are set in `vercel.json`. Feed keys go in the Vercel project's environment variables.
 Commits are stored per serverless instance (`/tmp`).
 
 ## Roadmap and known limitations

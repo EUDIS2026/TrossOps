@@ -24,4 +24,12 @@ def load(path: Path = ENV_FILE) -> list[str]:
     return loaded
 
 
+
+def public_mode() -> bool:
+    """TROSSOPS_PUBLIC=1: the deployment is an open public demo. The API is read-only for visitors, the terrain proxy
+    (the operator's Lantmäteriet account) is rate-limited per client, and real vessels are not named in pattern
+    indicators."""
+    return os.environ.get("TROSSOPS_PUBLIC", "").strip().lower() in ("1", "true", "yes")
+
+
 load()

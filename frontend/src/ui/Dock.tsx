@@ -302,7 +302,7 @@ function SourcesPanel() {
     </div>)}
       {!sources.length && <div className="quiet">Loading source status…</div>}
     </div>
-    <div className="section"><h4>What is synthetic</h4><small className="quiet">{notice}</small></div>
+    <div className="section"><h4>What is synthetic</h4><small className="quiet">{notice} TrossOps is an independent demonstrator: it is not affiliated with or endorsed by the Swedish Armed Forces (Försvarsmakten) or any other authority.</small></div>
   </>
 }
 

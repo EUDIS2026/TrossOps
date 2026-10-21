@@ -17,10 +17,12 @@ an own road march, or (thermal) a reported explosion or fire.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 from datetime import datetime, timedelta, timezone
 
 from . import feeds, geo
+from .envfile import public_mode
 from .orbat import CABLES
 from .models import GeoPosition, InputReport
 
@@ -286,9 +288,12 @@ def _ais_cable_loiter(iso: str) -> list[InputReport]:
             minutes = (run[-1]["timestampMs"] - run[0]["timestampMs"]) / 60_000 if len(run) >= 2 else 0
             if minutes < 20:
                 continue
-            name = v.get("name") or f"MMSI {v['id']}"
+            # public demo: a real vessel is never named next to a cable (a screenshot would read as an accusation)
+            anon = public_mode()
+            name = "A vessel" if anon else (v.get("name") or f"MMSI {v['id']}")
             status = v.get("navStatusLabel") or "status not reported"
-            out.append(InputReport(id=f"in-x-ais-{v['id']}-{c['id']}", channel="sensor_detection", authorLevel="sensor", author="AIS pattern indicator (Digitraffic, real)",
+            vid = hashlib.sha1(str(v["id"]).encode()).hexdigest()[:10] if anon else v["id"]
+            out.append(InputReport(id=f"in-x-ais-{vid}-{c['id']}", channel="sensor_detection", authorLevel="sensor", author="AIS pattern indicator (Digitraffic, real)",
                                    receivedAt=iso, effectiveAt=iso, severity="advisory", title=f"{name} slow over {c['label']} for {minutes:.0f} min",
                                    text=f"Public AIS: {v.get('shipTypeLabel') or 'vessel'} at {(v.get('speedMps') or 0) * 1.944:.1f} kn, {status}, within 2 km of the corridor. "
                                         "A pattern indicator from public broadcasts, not an assessment of the vessel.",

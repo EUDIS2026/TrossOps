@@ -5,7 +5,7 @@ import { SceneController } from './scene/controller'
 import { RuntimeContext, type Runtime } from './ui/context'
 import { Dock, Drawer } from './ui/Dock'
 import { Inspector } from './ui/Inspector'
-import { HoverCard, Kpis, Legend, RouteBanner, Timeline, Toasts } from './ui/Overlays'
+import { DemoMark, HoverCard, Kpis, Legend, RouteBanner, Timeline, Toasts } from './ui/Overlays'
 import { TopBar } from './ui/TopBar'
 import { MapToolsLayer } from './ui/tools/ToolsControl'
 
@@ -73,6 +73,7 @@ export function App() {
       <HoverCard />
       <Timeline />
       <Toasts />
+      <DemoMark />
       <MapToolsLayer />
     </div>
   </RuntimeContext.Provider>

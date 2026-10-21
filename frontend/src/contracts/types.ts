@@ -74,7 +74,7 @@ export interface WorldEvent { id: string; assetId: string; kind: string; worldRe
 export interface LayerDef { id: string; label: string; group: string; description: string; minZoom: number; maxZoom: number; supports3d: boolean; sourceKinds: SourceKind[]; legend: Record<string, string>[] }
 export interface ModeDef { id: string; label: string; description: string; layers: string[]; camera: { lng: number; lat: number; zoom: number; pitch: number; bearing: number }; kpis: string[] }
 export interface RoleDef { id: string; label: string; scope: 'national' | 'regional' | 'functional'; description: string; modes: ModeDef[]; defaultModeId: string }
-export interface Views { roles: RoleDef[]; layers: LayerDef[]; rules: { id: string; title: string }[]; channels: { id: Channel; label: string; level: string; weight: number }[]; regionScope: Record<string, string[]>; exclusiveGroups: string[] }
+export interface Views { roles: RoleDef[]; layers: LayerDef[]; rules: { id: string; title: string }[]; channels: { id: Channel; label: string; level: string; weight: number }[]; regionScope: Record<string, string[]>; exclusiveGroups: string[]; publicDemo?: boolean }
 export interface LayerAttention { count: number; severity: Severity; alertIds: string[] }
 export type StatusRow = [Condition, number | null, number | null, number | null, string | null, boolean, number]
 export type ObservedRow = [string, number, number, number | null, number | null, number | null, Condition]
