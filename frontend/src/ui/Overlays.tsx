@@ -68,15 +68,12 @@ export function RouteBanner() {
 
 /** Toasts and errors, plus a screen-reader announcement when new alerts arrive. The live regions are always in
  * the DOM (only their content changes) so assistive technology announces every update. */
-/** Public demo (TROSSOPS_PUBLIC=1): a permanent notice over the map plus a faint tiled watermark, so every screenshot
- * says what it is. Purely visual (pointer-events: none). */
+/** Public demo (TROSSOPS_PUBLIC=1): a faint tiled watermark over the map, so every screenshot says what it is.
+ * Purely visual (pointer-events: none). */
 export function DemoMark() {
   const on = useApp(s => !!s.views?.publicDemo)
   if (!on) return null
-  return <>
-    <div className="demo-watermark" aria-hidden="true" />
-    <div className="demo-mark" role="note">Public demo · synthetic military data · not an official or government system</div>
-  </>
+  return <div className="demo-watermark" role="note" aria-label="Demo with simulated data" />
 }
 
 export function Toasts() {
